@@ -502,7 +502,7 @@ Aim for 3-7 ACs per SI; cap at 10 — split the SI otherwise (see "Overflow poli
 
 ## Template: SI block
 
-Output path: `{target_path}`. Phase mode → `docs/phases/phase-NN-{slug}/phase-NN-{slug}.md`. Task mode → `docs/tasks/task-{slug}/task-{slug}.md`. Template shape is identical across modes.
+Output path: `{target_path}`. Phase mode → `docs/phases/phase-NN-{slug}/phase-NN-{slug}.md`. Apply the prefixed-slug rule (`plan-pipeline/SKILL.md` → "Slug discovery → Phase scope name"): when `{slug}` already starts with `phase-NN-`, use `{slug}` as the scope name (e.g. `docs/phases/phase-03-videos/phase-03-videos.md`). Task mode → `docs/tasks/task-{slug}/task-{slug}.md`. Template shape is identical across modes.
 
 Follow the shape below literally — Portuguese prose, English identifiers, per-TD traceability via backtick refs, horizontal rules between SIs.
 

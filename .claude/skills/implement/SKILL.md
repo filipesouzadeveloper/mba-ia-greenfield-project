@@ -18,7 +18,7 @@ The user either points to a plan document directly (e.g., `docs/phases/phase-02-
 
 **Mode detection:**
 
-- **Integer arg** → phase mode. Resolve to `docs/phases/phase-NN-{slug}/phase-NN-{slug}.md` (glob `docs/phases/phase-NN-*/phase-NN-*.md`).
+- **Integer arg** → phase mode. Resolve to `docs/phases/phase-NN-{slug}/phase-NN-{slug}.md` (glob `docs/phases/phase-NN-*/phase-NN-*.md`). Apply the prefixed-slug rule (`plan-pipeline/SKILL.md` → "Slug discovery → Phase scope name"): when `{slug}` already starts with `phase-NN-`, use `{slug}` as the scope name (e.g. `docs/phases/phase-03-videos/phase-03-videos.md`).
 - **String arg** → task mode by default. Resolve to `docs/tasks/task-{slug}/task-{slug}.md`. **Phase-slice shortcut (optional, slug-primary):** if no task plan matches, also glob `docs/phases/phase-*-{slug}/phase-*-{slug}.md` — a single match resolves to phase mode on that slice. This aligns with the `plan-pipeline` slicing model without requiring users to remember the phase number.
 
 **Fallback:** if mode detection is ambiguous or an explicit path is given, glob both directories; if multiple match, ask the user which one.

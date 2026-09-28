@@ -26,7 +26,7 @@ One argument: phase number `NN` (integer, phase mode) OR task slug `{slug}` (str
 
 Mode detection follows `plan-pipeline/SKILL.md`:
 
-- **Phase mode** (integer `NN`): resolve slug via phase-scope decisions-doc filter. On 0 matches abort with `"Run /research phase NN first"`. On ≥2 matches abort with `"Phase NN has multiple slices: <list>. Pass an explicit slice slug."` (list = slugs of all matched phase-scope docs). On exactly 1 match, proceed. Compute `{target_dir}` = `docs/phases/phase-NN-{slug}/`. Compute `{target_path}` = `docs/phases/phase-NN-{slug}/phase-NN-{slug}.md`.
+- **Phase mode** (integer `NN`): resolve slug via phase-scope decisions-doc filter. On 0 matches abort with `"Run /research phase NN first"`. On ≥2 matches abort with `"Phase NN has multiple slices: <list>. Pass an explicit slice slug."` (list = slugs of all matched phase-scope docs). On exactly 1 match, proceed. Compute `{target_dir}` = `docs/phases/phase-NN-{slug}/`. Compute `{target_path}` = `docs/phases/phase-NN-{slug}/phase-NN-{slug}.md`. Apply the prefixed-slug rule (`plan-pipeline/SKILL.md` → "Slug discovery → Phase scope name"): when `{slug}` already starts with `phase-NN-`, use `{slug}` as the scope name (e.g. `docs/phases/phase-03-videos/phase-03-videos.md`).
 - **Phase mode (slice slug)** (string matching a `scope_type: phase` doc): identifier IS the slice slug; `NN` is extracted from the doc's `related_phases[0]`. Same `{target_dir}` / `{target_path}` computation follows. Mode detection rules are defined in `plan-pipeline/SKILL.md`.
 - **Task mode** (string `{slug}`): expect `docs/tasks/task-{slug}/` to exist; abort if missing: `"docs/tasks/task-{slug}/ not found. Run /plan-context {slug} first."`. Compute `{target_path}` = `docs/tasks/task-{slug}/task-{slug}.md`.
 

@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 8/14 completed
+**SIs:** 9/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -83,9 +83,14 @@
   - Mapper `toVideoResponse` fica no próprio `video-response.dto.ts`; o controller chama `findOwnedOrFail` e mapeia, sem método novo no service.
 
 ### SI-03.9.1 — Infra: WorkerModule, entrypoint e serviço video-worker
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 4 passing (`src/worker/worker.module.integration-spec.ts`, rodado com `--detectOpenHandles` sem handles abertos); `tsc --noEmit` e lint limpos; critérios de aceite verificados à mão (logs do `video-worker` mostram o contexto sem `RouterExplorer`, sem porta publicada, API respondendo `200` em `:3000` com o worker de pé)
+- **Observations:**
+  - Lacuna do plano: com `autoLoadEntities`, registrar só `Video` no worker falha com `Entity metadata for Video#channel was not found` (`Video` → `Channel` → `User`). Filipe escolheu (2026-09-29) importar o `UsersModule` no `WorkerModule`, que registra `User` e importa o `ChannelsModule`; cada entidade continua no módulo dono. Custo: `UsersService`/`ChannelsService` instanciados sem uso no worker.
+  - Além do `typeorm-options.factory.ts` (exporta `typeOrmModuleOptions`, as opções completas do `forRootAsync`), as opções do `ConfigModule.forRoot` foram extraídas para `src/config/config-module.options.ts`, para o worker usar os mesmos `load`/`validationSchema` sem duplicar a lista.
+  - `IRedisClient` do bullmq v6 não expõe `ping`; o teste confere `status === 'ready'` da conexão da fila.
+  - `nestjs-api` (`start:dev`) e `video-worker` (`start:worker:dev`) compilam no mesmo `dist/` do volume, com `deleteOutDir: true`. Na verificação a API subiu com o worker já rodando e o worker seguiu de pé, mas os dois watchers recompilam no mesmo diretório a cada mudança. Se aparecer corrida (arquivo sumindo no restart), separar o `outDir` do worker é tarefa separada.
+  - O `.env` deixa `QUEUE_PREFIX=streamtube`, então o worker de dev consome a fila de dev e não a de teste (`streamtube-test`).
 
 ### SI-03.9.2 — Processar vídeo no worker (metadados, allowlist, thumbnail)
 - **Status:** pending

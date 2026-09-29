@@ -5,10 +5,12 @@ import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import {
   InvalidVideoStatusException,
+  UploadIncompleteException,
   VideoNotFoundException,
   VideoTooLargeException,
 } from '../common/exceptions/domain.exception';
 import { StorageService } from '../storage/storage.service';
+import type { CompletedUploadDto } from './dto/completed-upload.dto';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import type {
   CreatedVideoDraftDto,
@@ -17,8 +19,10 @@ import type {
 import type { UploadStatusDto } from './dto/upload-status.dto';
 import { Video, VideoStatus } from './entities/video.entity';
 import { assertUploadFormat } from './video-format';
+import { VideoProcessingQueue } from './video-processing.queue';
 import { generateVideoSlug } from './video-slug.util';
 import {
+  VIDEO_FAILURE_REASONS,
   VIDEO_MAX_SIZE_BYTES,
   VIDEO_PART_SIZE_BYTES,
   VIDEO_PART_URL_EXPIRES_SECONDS,
@@ -45,6 +49,7 @@ export class VideosService {
     private readonly videoRepository: Repository<Video>,
     private readonly channelsService: ChannelsService,
     private readonly storageService: StorageService,
+    private readonly videoProcessingQueue: VideoProcessingQueue,
   ) {}
 
   async createDraft(
@@ -138,6 +143,73 @@ export class VideosService {
         parts: await this.presignParts(key, video.upload_id, missingParts),
       },
     };
+  }
+
+  async completeUpload(
+    userId: string,
+    id: string,
+  ): Promise<CompletedUploadDto> {
+    const video = await this.findOwnedOrFail(userId, id);
+    if (video.status !== VideoStatus.DRAFT) {
+      throw new InvalidVideoStatusException();
+    }
+    if (!video.upload_id) {
+      throw new Error(`Draft video ${video.id} has no multipart upload`);
+    }
+
+    const key = this.storageService.originalKey(video.id);
+    const storedParts = await this.storageService.listParts(
+      key,
+      video.upload_id,
+    );
+    const stored = new Set(storedParts.map((part) => part.partNumber));
+    const partCount = partCountFor(video.size_bytes);
+    for (let partNumber = 1; partNumber <= partCount; partNumber++) {
+      if (!stored.has(partNumber)) {
+        throw new UploadIncompleteException();
+      }
+    }
+
+    await this.storageService.completeMultipartUpload(
+      key,
+      video.upload_id,
+      storedParts.filter((part) => part.partNumber <= partCount),
+    );
+    const { contentLength } = await this.storageService.headObject(key);
+
+    if (contentLength > VIDEO_MAX_SIZE_BYTES) {
+      await this.storageService.deleteObject(key);
+      await this.transitionFromDraft(video.id, {
+        status: VideoStatus.FAILED,
+        failure_reason: VIDEO_FAILURE_REASONS.FILE_TOO_LARGE,
+        upload_id: null,
+        size_bytes: contentLength,
+      });
+      throw new VideoTooLargeException();
+    }
+
+    await this.transitionFromDraft(video.id, {
+      status: VideoStatus.PROCESSING,
+      size_bytes: contentLength,
+      upload_id: null,
+    });
+    await this.videoProcessingQueue.enqueue(video.id);
+
+    return { id: video.id, slug: video.slug, status: VideoStatus.PROCESSING };
+  }
+
+  // Conditional on `draft` so a concurrent completion cannot enqueue twice.
+  private async transitionFromDraft(
+    id: string,
+    changes: Partial<Video>,
+  ): Promise<void> {
+    const { affected } = await this.videoRepository.update(
+      { id, status: VideoStatus.DRAFT },
+      changes,
+    );
+    if (!affected) {
+      throw new InvalidVideoStatusException();
+    }
   }
 
   private async resolveChannelId(userId: string): Promise<string> {

@@ -19,6 +19,7 @@ import {
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
+import { CompletedUploadDto } from './dto/completed-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { CreatedVideoDraftDto } from './dto/created-video-draft.dto';
 import { UploadStatusDto } from './dto/upload-status.dto';
@@ -108,5 +109,53 @@ export class VideosController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<UploadStatusDto> {
     return this.videosService.getUploadStatus(user.sub, id);
+  }
+
+  @Post(':id/upload/complete')
+  @HttpCode(HttpStatus.ACCEPTED)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Complete a video upload',
+    description:
+      'Completes the multipart upload with the parts already stored, checks the final object and queues the video for processing, moving it from draft to processing. Only the owner of a draft video can call it.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Video id' })
+  @ApiResponse({
+    status: 202,
+    description: 'Upload completed and video queued for processing',
+    type: CompletedUploadDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Video id is not a UUID',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: "Video not found or not in the user's channel",
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description:
+      'Video is no longer a draft (INVALID_VIDEO_STATUS) or some parts are missing (UPLOAD_INCOMPLETE)',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 413,
+    description:
+      'Stored object exceeds 10 GiB; it is removed and the video fails',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async completeUpload(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<CompletedUploadDto> {
+    return this.videosService.completeUpload(user.sub, id);
   }
 }

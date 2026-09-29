@@ -7,6 +7,15 @@ export const VIDEO_STALE_UPLOAD_HOURS = 24;
 export const VIDEO_SLUG_UNIQUE_CONSTRAINT = 'UQ_videos_slug';
 export const VIDEO_TITLE_MAX_LENGTH = 100;
 
+// Closed set of values stored in `videos.failure_reason`.
+export const VIDEO_FAILURE_REASONS = {
+  NOT_A_VIDEO: 'NOT_A_VIDEO',
+  UNSUPPORTED_FORMAT: 'UNSUPPORTED_FORMAT',
+  PROCESSING_ERROR: 'PROCESSING_ERROR',
+  FILE_TOO_LARGE: 'FILE_TOO_LARGE',
+  UPLOAD_EXPIRED: 'UPLOAD_EXPIRED',
+} as const;
+
 // Layer 1 (pre-registration): declared MIME type → accepted file extension.
 export const VIDEO_ALLOWED_UPLOAD_FORMATS = {
   'video/mp4': '.mp4',

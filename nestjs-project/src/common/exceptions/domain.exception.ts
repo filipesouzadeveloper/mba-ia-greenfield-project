@@ -80,3 +80,13 @@ export class InvalidVideoStatusException extends DomainException {
     );
   }
 }
+
+export class UploadIncompleteException extends DomainException {
+  constructor() {
+    super(
+      'UPLOAD_INCOMPLETE',
+      409,
+      'Not every part of the video has been uploaded',
+    );
+  }
+}

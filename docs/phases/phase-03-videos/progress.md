@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 6/14 completed
+**SIs:** 7/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -65,9 +65,15 @@
   - `npm run test:e2e` não passa `--runInBand` (o `nestjs-project/CLAUDE.md` diz que já passa): duas suítes E2E juntas colidem no banco. Rodado com `--runInBand` explícito; corrigir o script é tarefa separada.
 
 ### SI-03.7 — Endpoint POST /videos/{id}/upload/complete (conclusão + enfileiramento)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 17 passing (10 unit + 2 integração em `videos.service`, 5 E2E de `test/videos-upload-complete.e2e-spec.ts`), mais o cenário 1.4 do resume agora via HTTP
+- **Observations:**
+  - A transição `draft → processing` (e `draft → failed` no `FILE_TOO_LARGE`) é um `UPDATE ... WHERE id AND status = 'draft'`; `affected = 0` lança `InvalidVideoStatusException` antes do enqueue. Motivo: a doc do BullMQ avisa que, com `removeOnComplete`, um job removido deixa de contar como duplicado, então o `jobId` sozinho não barra um reenfileiramento concorrente.
+  - Partes além de `part_count` no `ListParts` são ignoradas no `CompleteMultipartUpload`.
+  - `VIDEO_FAILURE_REASONS` (os 5 valores de § Failure reasons) em `videos.constants.ts`; o worker usa os demais nos SIs 03.9.2/03.12.
+  - `ProcessVideoJobData` exportado de `src/videos/video-processing.queue.ts` (contrato do job para o SI-03.9.2).
+  - Cenário 1.4 do resume trocado pela chamada HTTP com um draft de 1 parte: o S3 recusa concluir com partes não finais < 5 MiB, e o draft padrão do teste tem 3 partes pequenas. Os E2E de vídeo agora também apagam `videos/{id}/original` na limpeza.
+  - Se o `enqueue` falhar depois do `UPDATE`, o vídeo fica em `processing` sem job (não há como voltar a `draft`: o multipart já foi concluído). O plano não trata esse caso; fica como tarefa separada (ex.: varredura de `processing` sem job).
 
 ### SI-03.8 — Endpoint GET /videos/{id} (leitura pelo dono)
 - **Status:** pending

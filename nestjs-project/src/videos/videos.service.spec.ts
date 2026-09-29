@@ -3,12 +3,14 @@ import type { ChannelsService } from '../channels/channels.service';
 import {
   InvalidVideoStatusException,
   UnsupportedVideoFormatException,
+  UploadIncompleteException,
   VideoNotFoundException,
   VideoTooLargeException,
 } from '../common/exceptions/domain.exception';
 import type { StorageService } from '../storage/storage.service';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import { Video, VideoStatus } from './entities/video.entity';
+import type { VideoProcessingQueue } from './video-processing.queue';
 import {
   VIDEO_MAX_SIZE_BYTES,
   VIDEO_PART_SIZE_BYTES,
@@ -69,7 +71,11 @@ describe('VideosService', () => {
     createMultipartUpload: jest.Mock;
     presignUploadPart: jest.Mock;
     listParts: jest.Mock;
+    completeMultipartUpload: jest.Mock;
+    headObject: jest.Mock;
+    deleteObject: jest.Mock;
   };
+  let videoProcessingQueue: { enqueue: jest.Mock };
   let service: VideosService;
 
   beforeEach(() => {
@@ -78,7 +84,7 @@ describe('VideosService', () => {
       save: jest.fn((video: Partial<Video>) =>
         Promise.resolve<SavedVideo>({ id: VIDEO_ID, slug: video.slug ?? '' }),
       ),
-      update: jest.fn().mockResolvedValue(undefined),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
       delete: jest.fn().mockResolvedValue(undefined),
       findOne: jest.fn().mockResolvedValue(makeDraftVideo()),
     };
@@ -93,11 +99,16 @@ describe('VideosService', () => {
           Promise.resolve(`https://storage/part-${partNumber}`),
       ),
       listParts: jest.fn().mockResolvedValue([]),
+      completeMultipartUpload: jest.fn().mockResolvedValue(undefined),
+      headObject: jest.fn().mockResolvedValue({ contentLength: 150_000_000 }),
+      deleteObject: jest.fn().mockResolvedValue(undefined),
     };
+    videoProcessingQueue = { enqueue: jest.fn().mockResolvedValue(undefined) };
     service = new VideosService(
       videoRepository as unknown as Repository<Video>,
       channelsService as unknown as ChannelsService,
       storageService as unknown as StorageService,
+      videoProcessingQueue as unknown as VideoProcessingQueue,
     );
   });
 
@@ -314,5 +325,137 @@ describe('VideosService', () => {
         expect(storageService.listParts).not.toHaveBeenCalled();
       },
     );
+  });
+
+  describe('completeUpload', () => {
+    beforeEach(() => {
+      videoRepository.findOne.mockResolvedValue(
+        makeDraftVideo({ slug: 'dQw4w9WgXcQ' }),
+      );
+      storageService.listParts.mockResolvedValue(
+        [3, 1, 2].map(makeUploadedPart),
+      );
+    });
+
+    it('should complete the multipart with the stored parts, move the video to processing and enqueue it', async () => {
+      storageService.headObject.mockResolvedValue({
+        contentLength: 149_999_999,
+      });
+
+      const result = await service.completeUpload(USER_ID, VIDEO_ID);
+
+      expect(storageService.completeMultipartUpload).toHaveBeenCalledWith(
+        ORIGINAL_KEY,
+        UPLOAD_ID,
+        expect.arrayContaining([1, 2, 3].map(makeUploadedPart)),
+      );
+      expect(storageService.headObject).toHaveBeenCalledWith(ORIGINAL_KEY);
+      expect(videoRepository.update).toHaveBeenCalledWith(
+        { id: VIDEO_ID, status: VideoStatus.DRAFT },
+        {
+          status: VideoStatus.PROCESSING,
+          size_bytes: 149_999_999,
+          upload_id: null,
+        },
+      );
+      expect(videoProcessingQueue.enqueue).toHaveBeenCalledWith(VIDEO_ID);
+      expect(result).toEqual({
+        id: VIDEO_ID,
+        slug: 'dQw4w9WgXcQ',
+        status: VideoStatus.PROCESSING,
+      });
+    });
+
+    it('should throw UploadIncompleteException when a part is missing', async () => {
+      storageService.listParts.mockResolvedValue([1, 3].map(makeUploadedPart));
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(UploadIncompleteException);
+
+      expect(storageService.completeMultipartUpload).not.toHaveBeenCalled();
+      expect(videoRepository.update).not.toHaveBeenCalled();
+      expect(videoProcessingQueue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should ignore stored parts beyond part_count when completing', async () => {
+      storageService.listParts.mockResolvedValue(
+        [1, 2, 3, 4].map(makeUploadedPart),
+      );
+
+      await service.completeUpload(USER_ID, VIDEO_ID);
+
+      const [, , parts] = storageService.completeMultipartUpload.mock
+        .calls[0] as [string, string, { partNumber: number }[]];
+      expect(parts.map((p) => p.partNumber).sort()).toEqual([1, 2, 3]);
+    });
+
+    it.each([VideoStatus.PROCESSING, VideoStatus.READY, VideoStatus.FAILED])(
+      'should throw InvalidVideoStatusException without enqueueing when the video is %s',
+      async (status) => {
+        videoRepository.findOne.mockResolvedValue(
+          makeDraftVideo({ status, upload_id: null }),
+        );
+
+        await expect(
+          service.completeUpload(USER_ID, VIDEO_ID),
+        ).rejects.toBeInstanceOf(InvalidVideoStatusException);
+
+        expect(storageService.listParts).not.toHaveBeenCalled();
+        expect(videoProcessingQueue.enqueue).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should throw VideoNotFoundException when the video is not in the user channel', async () => {
+      videoRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+
+      expect(storageService.listParts).not.toHaveBeenCalled();
+    });
+
+    it('should delete the object, fail the video with FILE_TOO_LARGE and not enqueue when the stored object exceeds 10 GiB', async () => {
+      storageService.headObject.mockResolvedValue({
+        contentLength: VIDEO_MAX_SIZE_BYTES + 1,
+      });
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(VideoTooLargeException);
+
+      expect(storageService.deleteObject).toHaveBeenCalledWith(ORIGINAL_KEY);
+      expect(videoRepository.update).toHaveBeenCalledWith(
+        { id: VIDEO_ID, status: VideoStatus.DRAFT },
+        expect.objectContaining({
+          status: VideoStatus.FAILED,
+          failure_reason: 'FILE_TOO_LARGE',
+          upload_id: null,
+        }),
+      );
+      expect(videoProcessingQueue.enqueue).not.toHaveBeenCalled();
+    });
+
+    it('should accept a stored object exactly at the 10 GiB ceiling', async () => {
+      storageService.headObject.mockResolvedValue({
+        contentLength: VIDEO_MAX_SIZE_BYTES,
+      });
+
+      await service.completeUpload(USER_ID, VIDEO_ID);
+
+      expect(storageService.deleteObject).not.toHaveBeenCalled();
+      expect(videoProcessingQueue.enqueue).toHaveBeenCalledWith(VIDEO_ID);
+    });
+
+    it('should throw InvalidVideoStatusException without enqueueing when a concurrent call already left draft', async () => {
+      videoRepository.update.mockResolvedValue({ affected: 0 });
+
+      await expect(
+        service.completeUpload(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(InvalidVideoStatusException);
+
+      expect(videoProcessingQueue.enqueue).not.toHaveBeenCalled();
+    });
   });
 });

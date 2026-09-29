@@ -11,7 +11,7 @@ import { ValidationExceptionFilter } from '../src/common/filters/validation-exce
 import { MailService } from '../src/mail/mail.service';
 import { StorageService } from '../src/storage/storage.service';
 import { cleanAllTables } from '../src/test/create-test-data-source';
-import { Video, VideoStatus } from '../src/videos/entities/video.entity';
+import { Video } from '../src/videos/entities/video.entity';
 
 interface UploadPartBody {
   part_number: number;
@@ -103,14 +103,12 @@ describe('videos-upload-resume', () => {
   });
 
   async function abortOpenUploads(): Promise<void> {
-    const drafts = await videoRepository.find();
-    for (const video of drafts) {
+    for (const video of await videoRepository.find()) {
+      const key = storage.originalKey(video.id);
       if (video.upload_id) {
-        await storage.abortMultipartUpload(
-          storage.originalKey(video.id),
-          video.upload_id,
-        );
+        await storage.abortMultipartUpload(key, video.upload_id);
       }
+      await storage.deleteObject(key);
     }
   }
 
@@ -198,14 +196,29 @@ describe('videos-upload-resume', () => {
   });
 
   it('rejects-video-not-in-draft', async () => {
-    // POST /videos/{id}/upload/complete arrives in SI-03.7; move the status directly.
-    await videoRepository.update(
-      { id: draft.id },
-      { status: VideoStatus.PROCESSING },
-    );
+    const bytes = Buffer.from('the whole video in a single part');
+    const created = await request(app.getHttpServer())
+      .post('/videos')
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .send({
+        filename: 'clip.mp4',
+        content_type: 'video/mp4',
+        size_bytes: bytes.length,
+      })
+      .expect(201);
+    const singlePart = created.body as CreatedDraftBody;
+    const put = await fetch(singlePart.upload.parts[0].url, {
+      method: 'PUT',
+      body: bytes,
+    });
+    expect(put.status).toBe(200);
+    await request(app.getHttpServer())
+      .post(`/videos/${singlePart.id}/upload/complete`)
+      .set('Authorization', `Bearer ${ownerToken}`)
+      .expect(202);
 
     const res = await request(app.getHttpServer())
-      .get(`/videos/${draft.id}/upload`)
+      .get(`/videos/${singlePart.id}/upload`)
       .set('Authorization', `Bearer ${ownerToken}`)
       .expect(409);
 

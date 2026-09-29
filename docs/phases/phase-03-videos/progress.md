@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 4/14 completed
+**SIs:** 5/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -43,9 +43,15 @@
   - `videos.constants.ts` também traz a allowlist das duas camadas (TD-13) como `VIDEO_ALLOWED_UPLOAD_FORMATS` / `VIDEO_ALLOWED_CODECS`, já que ela faz parte da seção de constantes do Data Model.
 
 ### SI-03.5 — Endpoint POST /videos (pré-cadastro + início do multipart)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 35 passing (30 unit/integração + 5 E2E de `test/videos-create.e2e-spec.ts`)
+- **Observations:**
+  - O E2E revelou defeito do SI-03.1 em `test/jest-e2e.json`: `setupFiles` apontava `<rootDir>/src/test/test-env.ts`, mas o `rootDir` é `test/`, então nenhum E2E rodava. Com aprovação do Filipe (2026-09-29), corrigido para `<rootDir>/../src/test/test-env.ts` e adicionado `testTimeout: 120000` (o boot do `AppModule` com MinIO/Redis passa dos 5s no volume do Windows), em commit separado `0c84a97`.
+  - Constantes novas em `videos.constants.ts`: `VIDEO_SLUG_UNIQUE_CONSTRAINT` (a entidade passou a usá-la em vez do literal `'UQ_videos_slug'`) e `VIDEO_TITLE_MAX_LENGTH`.
+  - Retry de slug detecta a violação pelo nome da constraint (`QueryFailedError.constraint`), não pelo `detail` como em `ChannelsService`.
+  - Compensação: se `createMultipartUpload` falhar, o rascunho recém-inserido é removido e o erro propaga (senão ficaria um `draft` sem `upload_id`).
+  - Usuário sem canal lança `Error` genérico (invariante: todo usuário tem canal); o plano não define exceção de domínio para esse caso.
+  - DTO de resposta em `src/videos/dto/created-video-draft.dto.ts` (`CreatedVideoDraftDto`, `MultipartUploadDto`, `UploadPartUrlDto`).
 
 ### SI-03.6 — Endpoint GET /videos/{id}/upload (retomada do upload)
 - **Status:** pending

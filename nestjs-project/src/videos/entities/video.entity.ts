@@ -10,6 +10,7 @@ import {
   type ValueTransformer,
 } from 'typeorm';
 import { Channel } from '../../channels/entities/channel.entity';
+import { VIDEO_SLUG_UNIQUE_CONSTRAINT } from '../videos.constants';
 
 export enum VideoStatus {
   DRAFT = 'draft',
@@ -30,7 +31,7 @@ export class Video {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Index('UQ_videos_slug', { unique: true })
+  @Index(VIDEO_SLUG_UNIQUE_CONSTRAINT, { unique: true })
   @Column({ type: 'varchar', length: 11 })
   slug: string;
 

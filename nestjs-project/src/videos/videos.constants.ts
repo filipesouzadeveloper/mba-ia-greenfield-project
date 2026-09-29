@@ -4,6 +4,8 @@ export const VIDEO_PART_URL_EXPIRES_SECONDS = 3600;
 export const VIDEO_SLUG_LENGTH = 11;
 export const VIDEO_SLUG_MAX_RETRIES = 5;
 export const VIDEO_STALE_UPLOAD_HOURS = 24;
+export const VIDEO_SLUG_UNIQUE_CONSTRAINT = 'UQ_videos_slug';
+export const VIDEO_TITLE_MAX_LENGTH = 100;
 
 // Layer 1 (pre-registration): declared MIME type → accepted file extension.
 export const VIDEO_ALLOWED_UPLOAD_FORMATS = {

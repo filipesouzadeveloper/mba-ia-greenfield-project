@@ -48,3 +48,19 @@ export class TokenReuseDetectedException extends DomainException {
     );
   }
 }
+
+export class UnsupportedVideoFormatException extends DomainException {
+  constructor() {
+    super(
+      'UNSUPPORTED_VIDEO_FORMAT',
+      422,
+      'Video format is not supported; use MP4 (video/mp4) or WebM (video/webm)',
+    );
+  }
+}
+
+export class VideoTooLargeException extends DomainException {
+  constructor() {
+    super('VIDEO_TOO_LARGE', 413, 'Video exceeds the maximum size of 10 GiB');
+  }
+}

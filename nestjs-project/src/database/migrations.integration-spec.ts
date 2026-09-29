@@ -39,16 +39,13 @@ describe('Database migrations (integration)', () => {
 
     await dataSource.initialize();
 
-    await Promise.all([
-      ...MANAGED_TABLES.map((table) =>
-        dataSource.query(`DROP TABLE IF EXISTS "${table}" CASCADE`),
-      ),
-      dataSource.query(`DROP TABLE IF EXISTS "migrations" CASCADE`),
-    ]);
-    await Promise.all(
-      MANAGED_ENUM_TYPES.map((type) =>
-        dataSource.query(`DROP TYPE IF EXISTS "${type}" CASCADE`),
-      ),
+    // One statement per kind: concurrent DROPs of FK-linked tables deadlock.
+    const quoted = (names: string[]) => names.map((n) => `"${n}"`).join(', ');
+    await dataSource.query(
+      `DROP TABLE IF EXISTS ${quoted([...MANAGED_TABLES, 'migrations'])} CASCADE`,
+    );
+    await dataSource.query(
+      `DROP TYPE IF EXISTS ${quoted(MANAGED_ENUM_TYPES)} CASCADE`,
     );
   });
 

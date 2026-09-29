@@ -12,6 +12,7 @@ import { ValidationExceptionFilter } from '../src/common/filters/validation-exce
 import { MailService } from '../src/mail/mail.service';
 import { VIDEO_PROCESSING_QUEUE } from '../src/queue/queue.constants';
 import { StorageService } from '../src/storage/storage.service';
+import { binaryParser } from '../src/test/binary-parser';
 import { cleanAllTables } from '../src/test/create-test-data-source';
 import { generateVideoFixture } from '../src/test/video-fixtures';
 import { Video, VideoStatus } from '../src/videos/entities/video.entity';
@@ -26,16 +27,6 @@ interface ErrorBody {
   statusCode: number;
   error: string;
 }
-
-// Collects the raw response bytes whatever the Content-Type.
-const binaryParser = (
-  res: NodeJS.ReadableStream,
-  callback: (err: Error | null, body: Buffer) => void,
-): void => {
-  const chunks: Buffer[] = [];
-  res.on('data', (chunk: Buffer) => chunks.push(chunk));
-  res.on('end', () => callback(null, Buffer.concat(chunks)));
-};
 
 describe('videos-stream', () => {
   let app: INestApplication<App>;

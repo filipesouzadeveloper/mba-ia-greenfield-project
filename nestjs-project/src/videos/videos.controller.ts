@@ -1,7 +1,17 @@
-import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+} from '@nestjs/common';
 import {
   ApiBearerAuth,
   ApiOperation,
+  ApiParam,
   ApiResponse,
   ApiTags,
   getSchemaPath,
@@ -11,6 +21,7 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { CreatedVideoDraftDto } from './dto/created-video-draft.dto';
+import { UploadStatusDto } from './dto/upload-status.dto';
 import { VideosService } from './videos.service';
 
 @ApiTags('videos')
@@ -57,5 +68,45 @@ export class VideosController {
     @Body() dto: CreateVideoDto,
   ): Promise<CreatedVideoDraftDto> {
     return this.videosService.createDraft(user.sub, dto);
+  }
+
+  @Get(':id/upload')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Resume a video upload',
+    description:
+      'Lists the parts of the multipart upload already stored and returns fresh presigned URLs only for the missing ones. Only the owner of a draft video can call it.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Video id' })
+  @ApiResponse({
+    status: 200,
+    description: 'Upload status with URLs for the missing parts',
+    type: UploadStatusDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Video id is not a UUID',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: "Video not found or not in the user's channel",
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 409,
+    description: 'Video is no longer a draft',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async getUploadStatus(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<UploadStatusDto> {
+    return this.videosService.getUploadStatus(user.sub, id);
   }
 }

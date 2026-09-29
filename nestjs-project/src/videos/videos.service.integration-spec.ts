@@ -5,6 +5,7 @@ import { RefreshToken } from '../auth/entities/refresh-token.entity';
 import { VerificationToken } from '../auth/entities/verification-token.entity';
 import { ChannelsService } from '../channels/channels.service';
 import { Channel } from '../channels/entities/channel.entity';
+import { VideoNotFoundException } from '../common/exceptions/domain.exception';
 import storageConfig from '../config/storage.config';
 import { StorageModule } from '../storage/storage.module';
 import { StorageService } from '../storage/storage.service';
@@ -151,6 +152,39 @@ describe('VideosService (integration)', () => {
         video.upload_id ?? '',
       );
       expect(parts.map((p) => p.partNumber)).toEqual([1]);
+    });
+  });
+
+  describe('getUploadStatus', () => {
+    it('should report the stored part and presign only the missing one', async () => {
+      const { user } = await createUserWithChannel();
+      const { result } = await createDraft(user.id, VIDEO_PART_SIZE_BYTES + 1);
+      const put = await fetch(result.upload.parts[0].url, {
+        method: 'PUT',
+        body: Buffer.from('some video bytes'),
+      });
+      expect(put.status).toBe(200);
+
+      const status = await videosService.getUploadStatus(user.id, result.id);
+
+      expect(status.upload.part_count).toBe(2);
+      expect(status.upload.uploaded_parts).toEqual([1]);
+      expect(status.upload.parts.map((p) => p.part_number)).toEqual([2]);
+      const resumed = await fetch(status.upload.parts[0].url, {
+        method: 'PUT',
+        body: Buffer.from('more video bytes'),
+      });
+      expect(resumed.status).toBe(200);
+    });
+
+    it('should hide a video that belongs to another channel', async () => {
+      const { user: owner } = await createUserWithChannel();
+      const { user: other } = await createUserWithChannel();
+      const { result } = await createDraft(owner.id, 1);
+
+      await expect(
+        videosService.getUploadStatus(other.id, result.id),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
     });
   });
 });

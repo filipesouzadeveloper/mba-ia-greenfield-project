@@ -3,13 +3,18 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { basename, extname } from 'path';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
-import { VideoTooLargeException } from '../common/exceptions/domain.exception';
+import {
+  InvalidVideoStatusException,
+  VideoNotFoundException,
+  VideoTooLargeException,
+} from '../common/exceptions/domain.exception';
 import { StorageService } from '../storage/storage.service';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import type {
   CreatedVideoDraftDto,
   UploadPartUrlDto,
 } from './dto/created-video-draft.dto';
+import type { UploadStatusDto } from './dto/upload-status.dto';
 import { Video, VideoStatus } from './entities/video.entity';
 import { assertUploadFormat } from './video-format';
 import { generateVideoSlug } from './video-slug.util';
@@ -26,6 +31,12 @@ const isSlugUniqueViolation = (err: unknown): boolean =>
   err instanceof QueryFailedError &&
   (err as QueryFailedError & { constraint?: unknown }).constraint ===
     VIDEO_SLUG_UNIQUE_CONSTRAINT;
+
+const partCountFor = (sizeBytes: number): number =>
+  Math.ceil(sizeBytes / VIDEO_PART_SIZE_BYTES);
+
+const partUrlsExpiresAt = (): string =>
+  new Date(Date.now() + VIDEO_PART_URL_EXPIRES_SECONDS * 1000).toISOString();
 
 @Injectable()
 export class VideosService {
@@ -45,12 +56,8 @@ export class VideosService {
     }
     assertUploadFormat(dto.filename, dto.content_type);
 
-    const channel = await this.channelsService.findByUserId(userId);
-    if (!channel) {
-      throw new Error(`User ${userId} has no channel`);
-    }
-
-    const video = await this.insertWithUniqueSlug(channel.id, dto);
+    const channelId = await this.resolveChannelId(userId);
+    const video = await this.insertWithUniqueSlug(channelId, dto);
     const key = this.storageService.originalKey(video.id);
 
     let uploadId: string;
@@ -69,8 +76,12 @@ export class VideosService {
       { upload_id: uploadId },
     );
 
-    const partCount = Math.ceil(dto.size_bytes / VIDEO_PART_SIZE_BYTES);
-    const parts = await this.presignParts(key, uploadId, partCount);
+    const partCount = partCountFor(dto.size_bytes);
+    const parts = await this.presignParts(
+      key,
+      uploadId,
+      Array.from({ length: partCount }, (_, i) => i + 1),
+    );
 
     return {
       id: video.id,
@@ -79,12 +90,62 @@ export class VideosService {
       upload: {
         part_size: VIDEO_PART_SIZE_BYTES,
         part_count: partCount,
-        expires_at: new Date(
-          Date.now() + VIDEO_PART_URL_EXPIRES_SECONDS * 1000,
-        ).toISOString(),
+        expires_at: partUrlsExpiresAt(),
         parts,
       },
     };
+  }
+
+  async findOwnedOrFail(userId: string, id: string): Promise<Video> {
+    const channelId = await this.resolveChannelId(userId);
+    const video = await this.videoRepository.findOne({
+      where: { id, channel_id: channelId },
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    return video;
+  }
+
+  async getUploadStatus(userId: string, id: string): Promise<UploadStatusDto> {
+    const video = await this.findOwnedOrFail(userId, id);
+    if (video.status !== VideoStatus.DRAFT) {
+      throw new InvalidVideoStatusException();
+    }
+    if (!video.upload_id) {
+      throw new Error(`Draft video ${video.id} has no multipart upload`);
+    }
+
+    const key = this.storageService.originalKey(video.id);
+    const partCount = partCountFor(video.size_bytes);
+    const stored = new Set(
+      (await this.storageService.listParts(key, video.upload_id)).map(
+        (part) => part.partNumber,
+      ),
+    );
+    const allParts = Array.from({ length: partCount }, (_, i) => i + 1);
+    const uploadedParts = allParts.filter((n) => stored.has(n));
+    const missingParts = allParts.filter((n) => !stored.has(n));
+
+    return {
+      id: video.id,
+      status: VideoStatus.DRAFT,
+      upload: {
+        part_size: VIDEO_PART_SIZE_BYTES,
+        part_count: partCount,
+        expires_at: partUrlsExpiresAt(),
+        uploaded_parts: uploadedParts,
+        parts: await this.presignParts(key, video.upload_id, missingParts),
+      },
+    };
+  }
+
+  private async resolveChannelId(userId: string): Promise<string> {
+    const channel = await this.channelsService.findByUserId(userId);
+    if (!channel) {
+      throw new Error(`User ${userId} has no channel`);
+    }
+    return channel.id;
   }
 
   private async insertWithUniqueSlug(
@@ -121,9 +182,8 @@ export class VideosService {
   private async presignParts(
     key: string,
     uploadId: string,
-    partCount: number,
+    partNumbers: number[],
   ): Promise<UploadPartUrlDto[]> {
-    const partNumbers = Array.from({ length: partCount }, (_, i) => i + 1);
     return Promise.all(
       partNumbers.map(async (partNumber) => ({
         part_number: partNumber,

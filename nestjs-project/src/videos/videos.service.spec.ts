@@ -1,7 +1,9 @@
 import { QueryFailedError, type Repository } from 'typeorm';
 import type { ChannelsService } from '../channels/channels.service';
 import {
+  InvalidVideoStatusException,
   UnsupportedVideoFormatException,
+  VideoNotFoundException,
   VideoTooLargeException,
 } from '../common/exceptions/domain.exception';
 import type { StorageService } from '../storage/storage.service';
@@ -31,6 +33,21 @@ function makeDto(overrides: Partial<CreateVideoDto> = {}): CreateVideoDto {
   };
 }
 
+function makeDraftVideo(overrides: Partial<Video> = {}): Partial<Video> {
+  return {
+    id: VIDEO_ID,
+    channel_id: CHANNEL_ID,
+    status: VideoStatus.DRAFT,
+    size_bytes: 150_000_000,
+    upload_id: UPLOAD_ID,
+    ...overrides,
+  };
+}
+
+function makeUploadedPart(partNumber: number) {
+  return { partNumber, etag: `"etag-${partNumber}"`, size: 16 };
+}
+
 function makeQueryFailedError(constraint: string): QueryFailedError {
   return Object.assign(new QueryFailedError('INSERT', [], new Error()), {
     code: '23505',
@@ -44,12 +61,14 @@ describe('VideosService', () => {
     save: jest.Mock;
     update: jest.Mock;
     delete: jest.Mock;
+    findOne: jest.Mock;
   };
   let channelsService: { findByUserId: jest.Mock };
   let storageService: {
     originalKey: jest.Mock;
     createMultipartUpload: jest.Mock;
     presignUploadPart: jest.Mock;
+    listParts: jest.Mock;
   };
   let service: VideosService;
 
@@ -61,6 +80,7 @@ describe('VideosService', () => {
       ),
       update: jest.fn().mockResolvedValue(undefined),
       delete: jest.fn().mockResolvedValue(undefined),
+      findOne: jest.fn().mockResolvedValue(makeDraftVideo()),
     };
     channelsService = {
       findByUserId: jest.fn().mockResolvedValue({ id: CHANNEL_ID }),
@@ -72,6 +92,7 @@ describe('VideosService', () => {
         (_key: string, _uploadId: string, partNumber: number) =>
           Promise.resolve(`https://storage/part-${partNumber}`),
       ),
+      listParts: jest.fn().mockResolvedValue([]),
     };
     service = new VideosService(
       videoRepository as unknown as Repository<Video>,
@@ -216,5 +237,82 @@ describe('VideosService', () => {
       expect(videoRepository.delete).toHaveBeenCalledWith({ id: VIDEO_ID });
       expect(videoRepository.update).not.toHaveBeenCalled();
     });
+  });
+
+  describe('getUploadStatus', () => {
+    it('should list uploaded parts and presign only the missing ones', async () => {
+      storageService.listParts.mockResolvedValue([makeUploadedPart(2)]);
+
+      const result = await service.getUploadStatus(USER_ID, VIDEO_ID);
+
+      expect(storageService.listParts).toHaveBeenCalledWith(
+        ORIGINAL_KEY,
+        UPLOAD_ID,
+      );
+      expect(result.status).toBe(VideoStatus.DRAFT);
+      expect(result.upload.part_count).toBe(3);
+      expect(result.upload.uploaded_parts).toEqual([2]);
+      expect(result.upload.parts).toEqual([
+        { part_number: 1, url: 'https://storage/part-1' },
+        { part_number: 3, url: 'https://storage/part-3' },
+      ]);
+    });
+
+    it('should return uploaded parts in ascending order regardless of storage order', async () => {
+      storageService.listParts.mockResolvedValue([
+        makeUploadedPart(3),
+        makeUploadedPart(1),
+      ]);
+
+      const result = await service.getUploadStatus(USER_ID, VIDEO_ID);
+
+      expect(result.upload.uploaded_parts).toEqual([1, 3]);
+      expect(result.upload.parts.map((p) => p.part_number)).toEqual([2]);
+    });
+
+    it('should return no URLs when every part is already stored', async () => {
+      storageService.listParts.mockResolvedValue(
+        [1, 2, 3].map(makeUploadedPart),
+      );
+
+      const result = await service.getUploadStatus(USER_ID, VIDEO_ID);
+
+      expect(result.upload.uploaded_parts).toEqual([1, 2, 3]);
+      expect(result.upload.parts).toEqual([]);
+      expect(storageService.presignUploadPart).not.toHaveBeenCalled();
+    });
+
+    it('should look the video up by id within the user channel', async () => {
+      await service.getUploadStatus(USER_ID, VIDEO_ID);
+
+      expect(videoRepository.findOne).toHaveBeenCalledWith({
+        where: { id: VIDEO_ID, channel_id: CHANNEL_ID },
+      });
+    });
+
+    it('should throw VideoNotFoundException when the video is not in the user channel', async () => {
+      videoRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.getUploadStatus(USER_ID, VIDEO_ID),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+
+      expect(storageService.listParts).not.toHaveBeenCalled();
+    });
+
+    it.each([VideoStatus.PROCESSING, VideoStatus.READY, VideoStatus.FAILED])(
+      'should throw InvalidVideoStatusException when the video is %s',
+      async (status) => {
+        videoRepository.findOne.mockResolvedValue(
+          makeDraftVideo({ status, upload_id: null }),
+        );
+
+        await expect(
+          service.getUploadStatus(USER_ID, VIDEO_ID),
+        ).rejects.toBeInstanceOf(InvalidVideoStatusException);
+
+        expect(storageService.listParts).not.toHaveBeenCalled();
+      },
+    );
   });
 });

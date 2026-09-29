@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 5/14 completed
+**SIs:** 6/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -54,9 +54,15 @@
   - DTO de resposta em `src/videos/dto/created-video-draft.dto.ts` (`CreatedVideoDraftDto`, `MultipartUploadDto`, `UploadPartUrlDto`).
 
 ### SI-03.6 — Endpoint GET /videos/{id}/upload (retomada do upload)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 16 passing (8 unit + 2 integração em `videos.service`, 6 E2E de `test/videos-upload-resume.e2e-spec.ts`)
+- **Observations:**
+  - `ParseUUIDPipe` usado sem `exceptionFactory`: o padrão do pipe já lança `BadRequestException` (conferido em `@nestjs/common/pipes/parse-uuid.pipe.js`), que o `ValidationExceptionFilter` converte em `VALIDATION_ERROR`.
+  - Cenário 1.4 do test plan (`rejects-video-not-in-draft`) usa `POST /videos/{id}/upload/complete`, que só chega no SI-03.7; o E2E leva o vídeo a `processing` direto pelo repositório. Trocar pela chamada HTTP no SI-03.7.
+  - A resolução do canal saiu de `createDraft` para o helper privado `resolveChannelId`, compartilhado com `findOwnedOrFail`; `presignParts` passou a receber a lista de números de parte (retomada assina só as faltantes).
+  - Resposta em `src/videos/dto/upload-status.dto.ts` (`UploadStatusDto`, `ResumableUploadDto` estende `MultipartUploadDto` com `uploaded_parts`).
+  - Draft sem `upload_id` lança `Error` genérico (invariante: todo `draft` tem multipart; a compensação do SI-03.5 remove o rascunho quando o multipart falha).
+  - `npm run test:e2e` não passa `--runInBand` (o `nestjs-project/CLAUDE.md` diz que já passa): duas suítes E2E juntas colidem no banco. Rodado com `--runInBand` explícito; corrigir o script é tarefa separada.
 
 ### SI-03.7 — Endpoint POST /videos/{id}/upload/complete (conclusão + enfileiramento)
 - **Status:** pending

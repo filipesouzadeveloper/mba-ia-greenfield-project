@@ -212,6 +212,39 @@ export class VideosController {
     );
   }
 
+  @Get(':slug/thumbnail')
+  @Public()
+  @ApiOperation({
+    summary: 'Get a video thumbnail',
+    description:
+      'Streams the thumbnail generated during processing from the private storage. Only ready videos expose it.',
+  })
+  @ApiParam({ name: 'slug', description: 'Video slug' })
+  @ApiProduces('image/jpeg')
+  @ApiResponse({
+    status: 200,
+    description: 'JPEG thumbnail',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found or not ready',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async thumbnail(
+    @Param('slug') slug: string,
+    @Res() res: Response,
+  ): Promise<void> {
+    const { body, contentLength, contentType } =
+      await this.videosService.openThumbnail(slug);
+    // The worker stores the thumbnail with its Content-Type (image/jpeg).
+    if (contentType) {
+      res.setHeader('Content-Type', contentType);
+    }
+    res.setHeader('Content-Length', contentLength);
+    await pipeline(body, res);
+  }
+
   @Get(':id/upload')
   @ApiBearerAuth('access-token')
   @ApiOperation({

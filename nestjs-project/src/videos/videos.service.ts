@@ -10,7 +10,7 @@ import {
   VideoNotFoundException,
   VideoTooLargeException,
 } from '../common/exceptions/domain.exception';
-import { StorageService } from '../storage/storage.service';
+import { StorageService, type ObjectStream } from '../storage/storage.service';
 import type { CompletedUploadDto } from './dto/completed-upload.dto';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import type {
@@ -159,6 +159,13 @@ export class VideosService {
         ? VIDEO_CONTAINER_MIME_TYPES[video.container]
         : undefined) ?? video.mime_type;
     return { video, range, body, contentType };
+  }
+
+  async openThumbnail(slug: string): Promise<ObjectStream> {
+    const video = await this.findReadyBySlugOrFail(slug);
+    return this.storageService.getObjectStream(
+      this.storageService.thumbnailKey(video.id),
+    );
   }
 
   async getUploadStatus(userId: string, id: string): Promise<UploadStatusDto> {

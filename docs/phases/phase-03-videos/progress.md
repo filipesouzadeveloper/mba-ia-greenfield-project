@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 11/14 completed
+**SIs:** 12/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -107,8 +107,9 @@
 
 ### SI-03.10 — Endpoints GET /videos/{slug}/stream e /download (Range → 206)
 - **Status:** completed
-- **Tests:** 34 novos passing (22 em `http-range.spec.ts`, 6 de `openStream` em `videos.service.spec.ts`, 5 E2E de `test/videos-stream.e2e-spec.ts`), todos na 1ª rodada; `tsc --noEmit` e lint limpos
+- **Tests:** 33 novos passing (22 em `http-range.spec.ts`, 6 de `openStream` em `videos.service.spec.ts`, 5 E2E de `test/videos-stream.e2e-spec.ts`), todos na 1ª rodada; lint limpo
 - **Observations:**
+  - Correção posterior: o commit do SI (2315ca9) saiu com erro de `tsc` no E2E — o `tsc --noEmit` rodou antes de o spec existir. O `binaryParser` estava tipado com `NodeJS.ReadableStream`, que o `.parse()` do supertest não aceita; foi extraído para `src/test/binary-parser.ts`, tipado com o `Response` do supertest, em commit de correção separado.
   - O 416 precisa do `size_bytes` no header `Content-Range`, e o controller não usa `try/catch`. Por isso `openStream` não lança no Range inválido: devolve `{ video, range: 'unsatisfiable' }` sem abrir o objeto, e o helper privado `sendVideo` do controller define `Content-Range: bytes */{size}` e lança `RangeNotSatisfiableException` (como a ação 4 do SI descreve).
   - `Content-Disposition` só é definido depois de descartado o 416, para a resposta de erro JSON do `/download` não virar anexo.
   - `Content-Type` sai de `VIDEO_CONTAINER_MIME_TYPES` (novo em `videos.constants.ts`) pelo `container` gravado pelo worker, com o `mime_type` declarado como reserva.
@@ -117,9 +118,13 @@
   - Fora do escopo: `HEAD` cai na mesma rota e abre o `GetObject` sem precisar do corpo.
 
 ### SI-03.11 — Endpoint GET /videos/{slug}/thumbnail
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 2 E2E passing em `test/videos-thumbnail.e2e-spec.ts` (sem unitário, conforme o plano); `tsc --noEmit` e lint limpos
+- **Observations:**
+  - `Content-Type` e `Content-Length` vêm do próprio objeto no storage: o worker grava a thumbnail com `ContentType: image/jpeg`. Assim a API não duplica o literal que fica em `THUMBNAIL.CONTENT_TYPE` de `worker.constants.ts` (constante do worker, que a API não deve importar).
+  - `openThumbnail` devolve o `ObjectStream` do `StorageService` direto. Um vídeo `ready` sem thumbnail no bucket (não deveria existir: o worker grava a thumbnail antes do `ready`) resulta em 500.
+  - Novo helper `generateThumbnailFixture()` em `src/test/video-fixtures.ts`: um frame do mesmo `testsrc` codificado como JPEG direto pelo FFmpeg, sem subir o vídeo nem rodar o worker.
+  - O `binaryParser` compartilhado (`src/test/binary-parser.ts`) veio da correção do SI-03.10.
 
 ### SI-03.12 — Limpar uploads multipart abandonados (job agendado)
 - **Status:** pending

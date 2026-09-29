@@ -35,6 +35,30 @@ const FIXTURES = {
 
 export type VideoFixture = keyof typeof FIXTURES | 'text';
 
+// Single frame of the same synthetic picture, encoded as JPEG.
+export async function generateThumbnailFixture(): Promise<Buffer> {
+  const { stdout } = await execFileAsync(
+    'ffmpeg',
+    [
+      '-v',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=320x240:rate=1',
+      '-frames:v',
+      '1',
+      '-f',
+      'image2',
+      '-c:v',
+      'mjpeg',
+      'pipe:1',
+    ],
+    { encoding: 'buffer' },
+  );
+  return stdout;
+}
+
 export async function generateVideoFixture(
   fixture: VideoFixture,
 ): Promise<Buffer> {

@@ -81,6 +81,16 @@ export class InvalidVideoStatusException extends DomainException {
   }
 }
 
+export class RangeNotSatisfiableException extends DomainException {
+  constructor() {
+    super(
+      'RANGE_NOT_SATISFIABLE',
+      416,
+      'Requested range is outside the video or malformed',
+    );
+  }
+}
+
 export class UploadIncompleteException extends DomainException {
   constructor() {
     super(

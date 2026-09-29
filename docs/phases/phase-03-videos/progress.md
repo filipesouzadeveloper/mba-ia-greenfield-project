@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 10/14 completed
+**SIs:** 11/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -106,9 +106,15 @@
   - O watcher do container `video-worker` não recompilou após as edições (bind mount do Windows sem eventos de arquivo); para o worker de dev carregar o processor é preciso `docker compose restart video-worker`.
 
 ### SI-03.10 — Endpoints GET /videos/{slug}/stream e /download (Range → 206)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 34 novos passing (22 em `http-range.spec.ts`, 6 de `openStream` em `videos.service.spec.ts`, 5 E2E de `test/videos-stream.e2e-spec.ts`), todos na 1ª rodada; `tsc --noEmit` e lint limpos
+- **Observations:**
+  - O 416 precisa do `size_bytes` no header `Content-Range`, e o controller não usa `try/catch`. Por isso `openStream` não lança no Range inválido: devolve `{ video, range: 'unsatisfiable' }` sem abrir o objeto, e o helper privado `sendVideo` do controller define `Content-Range: bytes */{size}` e lança `RangeNotSatisfiableException` (como a ação 4 do SI descreve).
+  - `Content-Disposition` só é definido depois de descartado o 416, para a resposta de erro JSON do `/download` não virar anexo.
+  - `Content-Type` sai de `VIDEO_CONTAINER_MIME_TYPES` (novo em `videos.constants.ts`) pelo `container` gravado pelo worker, com o `mime_type` declarado como reserva.
+  - `parseRange` segue o plano: sintaxe inválida (inclusive unidade diferente de `bytes`) vira 416; múltiplos intervalos são ignorados (200). O fallback ASCII do `Content-Disposition` troca não-ASCII, `"` e `\` por `_`; o `filename*` codifica também `'()*` (RFC 5987).
+  - Fora do escopo: quando o player aborta a conexão no meio do stream (comum ao dar seek), o `pipeline` rejeita com `Premature close`; o `BaseExceptionFilter` do Nest encerra a resposta corretamente, mas registra o erro no log. Filtrar esse caso é tarefa separada.
+  - Fora do escopo: `HEAD` cai na mesma rota e abre o `GetObject` sem precisar do corpo.
 
 ### SI-03.11 — Endpoint GET /videos/{slug}/thumbnail
 - **Status:** pending

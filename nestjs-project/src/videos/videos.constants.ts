@@ -25,6 +25,12 @@ export const VIDEO_ALLOWED_UPLOAD_FORMATS = {
   'video/webm': '.webm',
 } as const;
 
+// Canonical container (set by the worker) → `Content-Type` served on playback.
+export const VIDEO_CONTAINER_MIME_TYPES: Readonly<Record<string, string>> = {
+  mp4: 'video/mp4',
+  webm: 'video/webm',
+};
+
 // Layer 2 (worker, ffprobe): canonical container → accepted codecs.
 // `null` audio codec means a video without an audio stream.
 export const VIDEO_ALLOWED_CODECS = {

@@ -2,29 +2,38 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Param,
   ParseUUIDPipe,
   Post,
+  Res,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
+  ApiHeader,
   ApiOperation,
   ApiParam,
+  ApiProduces,
   ApiResponse,
   ApiTags,
   getSchemaPath,
 } from '@nestjs/swagger';
+import type { Response } from 'express';
+import { pipeline } from 'stream/promises';
 import type { JwtPayload } from '../auth/auth.types';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
+import { Public } from '../auth/decorators/public.decorator';
+import { RangeNotSatisfiableException } from '../common/exceptions/domain.exception';
 import { ApiErrorEnvelope } from '../common/openapi/api-error-envelope.dto';
 import { CompletedUploadDto } from './dto/completed-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { CreatedVideoDraftDto } from './dto/created-video-draft.dto';
 import { UploadStatusDto } from './dto/upload-status.dto';
 import { toVideoResponse, VideoResponseDto } from './dto/video-response.dto';
-import { VideosService } from './videos.service';
+import { buildContentDisposition, RANGE_UNSATISFIABLE } from './http-range';
+import { VideosService, type VideoStream } from './videos.service';
 
 @ApiTags('videos')
 @Controller('videos')
@@ -106,6 +115,101 @@ export class VideosController {
   ): Promise<VideoResponseDto> {
     const video = await this.videosService.findOwnedOrFail(user.sub, id);
     return toVideoResponse(video);
+  }
+
+  @Get(':slug/stream')
+  @Public()
+  @ApiOperation({
+    summary: 'Stream a video',
+    description:
+      'Streams the original file of a ready video from the private storage without buffering it. A single-range `Range` header returns 206 with that byte range, which lets players seek without downloading the whole file; without it the whole file is returned.',
+  })
+  @ApiParam({ name: 'slug', description: 'Video slug' })
+  @ApiHeader({
+    name: 'Range',
+    required: false,
+    description:
+      'Single byte range: `bytes=start-end`, `bytes=start-` or `bytes=-suffix`. Multiple ranges are ignored and the whole file is returned.',
+  })
+  @ApiProduces('video/mp4', 'video/webm')
+  @ApiResponse({
+    status: 200,
+    description: 'Whole file',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiResponse({
+    status: 206,
+    description: 'Requested byte range, described by `Content-Range`',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found or not ready',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 416,
+    description:
+      'Range starts beyond the file, is reversed or is malformed; `Content-Range: bytes */{size}` carries the file size',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async stream(
+    @Param('slug') slug: string,
+    @Headers('range') range: string | undefined,
+    @Res() res: Response,
+  ): Promise<void> {
+    const stream = await this.videosService.openStream(slug, range);
+    await this.sendVideo(res, stream);
+  }
+
+  @Get(':slug/download')
+  @Public()
+  @ApiOperation({
+    summary: 'Download a video',
+    description:
+      'Same as streaming, plus `Content-Disposition: attachment` with the original filename. `Range` is honored, so an interrupted download can be resumed.',
+  })
+  @ApiParam({ name: 'slug', description: 'Video slug' })
+  @ApiHeader({
+    name: 'Range',
+    required: false,
+    description:
+      'Single byte range: `bytes=start-end`, `bytes=start-` or `bytes=-suffix`. Multiple ranges are ignored and the whole file is returned.',
+  })
+  @ApiProduces('video/mp4', 'video/webm')
+  @ApiResponse({
+    status: 200,
+    description: 'Whole file as an attachment',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiResponse({
+    status: 206,
+    description:
+      'Requested byte range as an attachment, described by `Content-Range`',
+    schema: { type: 'string', format: 'binary' },
+  })
+  @ApiResponse({
+    status: 404,
+    description: 'Video not found or not ready',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 416,
+    description:
+      'Range starts beyond the file, is reversed or is malformed; `Content-Range: bytes */{size}` carries the file size',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async download(
+    @Param('slug') slug: string,
+    @Headers('range') range: string | undefined,
+    @Res() res: Response,
+  ): Promise<void> {
+    const stream = await this.videosService.openStream(slug, range);
+    await this.sendVideo(
+      res,
+      stream,
+      buildContentDisposition(stream.video.original_filename),
+    );
   }
 
   @Get(':id/upload')
@@ -194,5 +298,36 @@ export class VideosController {
     @Param('id', ParseUUIDPipe) id: string,
   ): Promise<CompletedUploadDto> {
     return this.videosService.completeUpload(user.sub, id);
+  }
+
+  private async sendVideo(
+    res: Response,
+    stream: VideoStream,
+    contentDisposition?: string,
+  ): Promise<void> {
+    const { video } = stream;
+    if (stream.range === RANGE_UNSATISFIABLE) {
+      res.setHeader('Content-Range', `bytes */${video.size_bytes}`);
+      throw new RangeNotSatisfiableException();
+    }
+
+    const { range, body, contentType } = stream;
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (contentDisposition) {
+      res.setHeader('Content-Disposition', contentDisposition);
+    }
+    if (range) {
+      res.status(HttpStatus.PARTIAL_CONTENT);
+      res.setHeader(
+        'Content-Range',
+        `bytes ${range.start}-${range.end}/${video.size_bytes}`,
+      );
+      res.setHeader('Content-Length', range.end - range.start + 1);
+    } else {
+      res.status(HttpStatus.OK);
+      res.setHeader('Content-Length', video.size_bytes);
+    }
+    await pipeline(body, res);
   }
 }

@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { basename, extname } from 'path';
+import type { Readable } from 'stream';
 import { QueryFailedError, Repository } from 'typeorm';
 import { ChannelsService } from '../channels/channels.service';
 import {
@@ -18,10 +19,17 @@ import type {
 } from './dto/created-video-draft.dto';
 import type { UploadStatusDto } from './dto/upload-status.dto';
 import { Video, VideoStatus } from './entities/video.entity';
+import {
+  type ByteRange,
+  formatByteRange,
+  parseRange,
+  RANGE_UNSATISFIABLE,
+} from './http-range';
 import { assertUploadFormat } from './video-format';
 import { VideoProcessingQueue } from './video-processing.queue';
 import { generateVideoSlug } from './video-slug.util';
 import {
+  VIDEO_CONTAINER_MIME_TYPES,
   VIDEO_FAILURE_REASONS,
   VIDEO_MAX_SIZE_BYTES,
   VIDEO_PART_SIZE_BYTES,
@@ -30,6 +38,16 @@ import {
   VIDEO_SLUG_UNIQUE_CONSTRAINT,
   VIDEO_TITLE_MAX_LENGTH,
 } from './videos.constants';
+
+// `range: null` means the whole object; an unsatisfiable range opens no stream.
+export type VideoStream =
+  | { video: Video; range: typeof RANGE_UNSATISFIABLE }
+  | {
+      video: Video;
+      range: ByteRange | null;
+      body: Readable;
+      contentType: string;
+    };
 
 const isSlugUniqueViolation = (err: unknown): boolean =>
   err instanceof QueryFailedError &&
@@ -110,6 +128,37 @@ export class VideosService {
       throw new VideoNotFoundException();
     }
     return video;
+  }
+
+  async findReadyBySlugOrFail(slug: string): Promise<Video> {
+    const video = await this.videoRepository.findOne({
+      where: { slug, status: VideoStatus.READY },
+    });
+    if (!video) {
+      throw new VideoNotFoundException();
+    }
+    return video;
+  }
+
+  async openStream(
+    slug: string,
+    rangeHeader: string | undefined,
+  ): Promise<VideoStream> {
+    const video = await this.findReadyBySlugOrFail(slug);
+    const range = parseRange(rangeHeader, video.size_bytes);
+    if (range === RANGE_UNSATISFIABLE) {
+      return { video, range };
+    }
+
+    const { body } = await this.storageService.getObjectStream(
+      this.storageService.originalKey(video.id),
+      range ? formatByteRange(range) : undefined,
+    );
+    const contentType =
+      (video.container
+        ? VIDEO_CONTAINER_MIME_TYPES[video.container]
+        : undefined) ?? video.mime_type;
+    return { video, range, body, contentType };
   }
 
   async getUploadStatus(userId: string, id: string): Promise<UploadStatusDto> {

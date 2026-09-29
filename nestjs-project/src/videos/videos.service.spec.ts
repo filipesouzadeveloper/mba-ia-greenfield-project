@@ -1,3 +1,4 @@
+import { Readable } from 'stream';
 import { QueryFailedError, type Repository } from 'typeorm';
 import type { ChannelsService } from '../channels/channels.service';
 import {
@@ -10,6 +11,7 @@ import {
 import type { StorageService } from '../storage/storage.service';
 import type { CreateVideoDto } from './dto/create-video.dto';
 import { Video, VideoStatus } from './entities/video.entity';
+import { RANGE_UNSATISFIABLE } from './http-range';
 import type { VideoProcessingQueue } from './video-processing.queue';
 import {
   VIDEO_MAX_SIZE_BYTES,
@@ -23,6 +25,8 @@ const CHANNEL_ID = 'channel-id';
 const VIDEO_ID = 'video-id';
 const UPLOAD_ID = 'upload-id';
 const ORIGINAL_KEY = `videos/${VIDEO_ID}/original`;
+const VIDEO_SLUG = 'aBcDeFgHiJk';
+const OBJECT_BODY = Readable.from([]);
 
 type SavedVideo = Pick<Video, 'id' | 'slug'>;
 
@@ -74,6 +78,7 @@ describe('VideosService', () => {
     completeMultipartUpload: jest.Mock;
     headObject: jest.Mock;
     deleteObject: jest.Mock;
+    getObjectStream: jest.Mock;
   };
   let videoProcessingQueue: { enqueue: jest.Mock };
   let service: VideosService;
@@ -102,6 +107,7 @@ describe('VideosService', () => {
       completeMultipartUpload: jest.fn().mockResolvedValue(undefined),
       headObject: jest.fn().mockResolvedValue({ contentLength: 150_000_000 }),
       deleteObject: jest.fn().mockResolvedValue(undefined),
+      getObjectStream: jest.fn().mockResolvedValue({ body: OBJECT_BODY }),
     };
     videoProcessingQueue = { enqueue: jest.fn().mockResolvedValue(undefined) };
     service = new VideosService(
@@ -456,6 +462,91 @@ describe('VideosService', () => {
       ).rejects.toBeInstanceOf(InvalidVideoStatusException);
 
       expect(videoProcessingQueue.enqueue).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('openStream', () => {
+    const SIZE = 1000;
+
+    beforeEach(() => {
+      videoRepository.findOne.mockResolvedValue(
+        makeDraftVideo({
+          slug: VIDEO_SLUG,
+          status: VideoStatus.READY,
+          upload_id: null,
+          size_bytes: SIZE,
+          container: 'webm',
+          mime_type: 'video/webm',
+        }),
+      );
+    });
+
+    it('should look the video up by slug among ready videos only', async () => {
+      await service.openStream(VIDEO_SLUG, undefined);
+
+      expect(videoRepository.findOne).toHaveBeenCalledWith({
+        where: { slug: VIDEO_SLUG, status: VideoStatus.READY },
+      });
+    });
+
+    it('should throw VideoNotFoundException without touching the storage when no ready video has the slug', async () => {
+      videoRepository.findOne.mockResolvedValue(null);
+
+      await expect(
+        service.openStream(VIDEO_SLUG, 'bytes=0-99'),
+      ).rejects.toBeInstanceOf(VideoNotFoundException);
+      expect(storageService.getObjectStream).not.toHaveBeenCalled();
+    });
+
+    it('should open the whole original when there is no Range header', async () => {
+      const stream = await service.openStream(VIDEO_SLUG, undefined);
+
+      expect(storageService.getObjectStream).toHaveBeenCalledWith(
+        ORIGINAL_KEY,
+        undefined,
+      );
+      expect(stream).toEqual(
+        expect.objectContaining({
+          range: null,
+          body: OBJECT_BODY,
+          contentType: 'video/webm',
+        }),
+      );
+    });
+
+    it('should forward the normalized range to the storage', async () => {
+      const stream = await service.openStream(VIDEO_SLUG, 'bytes=-100');
+
+      expect(storageService.getObjectStream).toHaveBeenCalledWith(
+        ORIGINAL_KEY,
+        'bytes=900-999',
+      );
+      expect(stream.range).toEqual({ start: 900, end: 999 });
+    });
+
+    it('should report an unsatisfiable range without opening the object', async () => {
+      const stream = await service.openStream(VIDEO_SLUG, `bytes=${SIZE}-`);
+
+      expect(stream.range).toBe(RANGE_UNSATISFIABLE);
+      expect(stream.video.size_bytes).toBe(SIZE);
+      expect(storageService.getObjectStream).not.toHaveBeenCalled();
+    });
+
+    it('should derive the Content-Type from the container detected by the worker', async () => {
+      videoRepository.findOne.mockResolvedValue(
+        makeDraftVideo({
+          status: VideoStatus.READY,
+          size_bytes: SIZE,
+          container: 'mp4',
+          mime_type: 'video/webm',
+        }),
+      );
+
+      const stream = await service.openStream(VIDEO_SLUG, undefined);
+
+      expect(stream).toEqual(
+        expect.objectContaining({ contentType: 'video/mp4' }),
+      );
     });
   });
 });

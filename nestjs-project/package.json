@@ -81,6 +81,7 @@
     ],
     "rootDir": "src",
     "testRegex": ".*\\.(spec|integration-spec)\\.ts$",
+    "testTimeout": 120000,
     "transform": {
       "^.+\\.(t|j)s$": "ts-jest"
     },

@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 7/14 completed
+**SIs:** 8/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -76,9 +76,11 @@
   - Se o `enqueue` falhar depois do `UPDATE`, o vídeo fica em `processing` sem job (não há como voltar a `draft`: o multipart já foi concluído). O plano não trata esse caso; fica como tarefa separada (ex.: varredura de `processing` sem job).
 
 ### SI-03.8 — Endpoint GET /videos/{id} (leitura pelo dono)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 5 passing (E2E de `test/videos-get.e2e-spec.ts`); `tsc --noEmit` e lint limpos
+- **Observations:**
+  - A coluna `container` da entidade é `varchar`; o DTO a tipa como `'mp4' | 'webm' | null` (chaves de `VIDEO_ALLOWED_CODECS`) com um cast no mapper, porque só o worker grava esse campo e ele só aceita containers da allowlist da camada 2.
+  - Mapper `toVideoResponse` fica no próprio `video-response.dto.ts`; o controller chama `findOwnedOrFail` e mapeia, sem método novo no service.
 
 ### SI-03.9.1 — Infra: WorkerModule, entrypoint e serviço video-worker
 - **Status:** pending

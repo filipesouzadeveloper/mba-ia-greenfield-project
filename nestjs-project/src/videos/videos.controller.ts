@@ -23,6 +23,7 @@ import { CompletedUploadDto } from './dto/completed-upload.dto';
 import { CreateVideoDto } from './dto/create-video.dto';
 import { CreatedVideoDraftDto } from './dto/created-video-draft.dto';
 import { UploadStatusDto } from './dto/upload-status.dto';
+import { toVideoResponse, VideoResponseDto } from './dto/video-response.dto';
 import { VideosService } from './videos.service';
 
 @ApiTags('videos')
@@ -69,6 +70,42 @@ export class VideosController {
     @Body() dto: CreateVideoDto,
   ): Promise<CreatedVideoDraftDto> {
     return this.videosService.createDraft(user.sub, dto);
+  }
+
+  @Get(':id')
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Get a video',
+    description:
+      'Returns the video to its owner, including the processing status, the failure reason and the metadata extracted by the worker (null until processing ends).',
+  })
+  @ApiParam({ name: 'id', format: 'uuid', description: 'Video id' })
+  @ApiResponse({
+    status: 200,
+    description: 'Video with status and extracted metadata',
+    type: VideoResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Video id is not a UUID',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 401,
+    description: 'Missing or invalid access token',
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  @ApiResponse({
+    status: 404,
+    description: "Video not found or not in the user's channel",
+    schema: { $ref: getSchemaPath(ApiErrorEnvelope) },
+  })
+  async findOne(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseUUIDPipe) id: string,
+  ): Promise<VideoResponseDto> {
+    const video = await this.videosService.findOwnedOrFail(user.sub, id);
+    return toVideoResponse(video);
   }
 
   @Get(':id/upload')

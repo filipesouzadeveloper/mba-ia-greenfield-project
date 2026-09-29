@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 9/14 completed
+**SIs:** 10/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -93,9 +93,17 @@
   - O `.env` deixa `QUEUE_PREFIX=streamtube`, então o worker de dev consome a fila de dev e não a de teste (`streamtube-test`).
 
 ### SI-03.9.2 — Processar vídeo no worker (metadados, allowlist, thumbnail)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 41 passing nos 3 arquivos do SI (17 novos de `classifyProbe` + 14 existentes em `video-format.spec.ts`, 4 em `ffmpeg.service.integration-spec.ts`, 6 em `video.processor.integration-spec.ts`), todos na 1ª rodada; `worker.module.integration-spec.ts` segue 4/4; `tsc --noEmit` e lint limpos
+- **Observations:**
+  - O passo 3 de § Events/Messages trata FFmpeg com código ≠ 0 como transitório, mas para um arquivo de texto o `ffprobe` sai com código 1 e `Invalid data found when processing input` (conferido no container). Para cumprir a tabela de Failure reasons ("não reconhece o arquivo" → `NOT_A_VIDEO`) e o critério de aceite, `FfmpegService.probe` lança `UnrecognizedMediaError` nesse caso e o `VideoProcessor` converte em `VideoProcessingFailure(NOT_A_VIDEO)`. Os demais códigos ≠ 0 continuam transitórios.
+  - `VideoProcessingFailure` fica em `src/videos/video-processing-failure.ts` (o plano não definia o arquivo); `VideoFailureReason` foi adicionado a `videos.constants.ts`.
+  - `findVideoStream` ignora streams com `disposition.attached_pic` (capa de arquivo de áudio), que assim vira `NOT_A_VIDEO`. Um stream de áudio com `codec_name` ausente é rejeitado, não tratado como "sem áudio".
+  - Por design da allowlist (mesmo demuxer), um MOV com H.264/AAC é aceito como `mp4` e um MKV com VP9/Opus como `webm`. Os casos "MOV/MKV" do teste unitário são rejeitados pelo codec (MOV com ProRes, MKV com H.264).
+  - `readMetadata` grava `duration_seconds`/`bitrate` como `null` quando o `ffprobe` não os informa; sem duração, a thumbnail usa o frame 0.
+  - O teste do processor enfileira pelo próprio `VideoProcessingQueue` da API (opções reais: 3 tentativas, backoff exponencial). O caso de erro transitório leva ~3s pelo backoff.
+  - Fora do escopo: (1) `execFile` sem `timeout` — uma leitura HTTP travada prende o worker (o lock do BullMQ continua sendo renovado); (2) a mensagem de erro do `execFile` inclui a URL pré-assinada, que vai para o `failedReason` do job no Redis e para o log; (3) o tipo `VideoContainer` está duplicado em `video-format.ts` e `video-response.dto.ts`.
+  - O watcher do container `video-worker` não recompilou após as edições (bind mount do Windows sem eventos de arquivo); para o worker de dev carregar o processor é preciso `docker compose restart video-worker`.
 
 ### SI-03.10 — Endpoints GET /videos/{slug}/stream e /download (Range → 206)
 - **Status:** pending

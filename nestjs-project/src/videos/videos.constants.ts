@@ -16,6 +16,9 @@ export const VIDEO_FAILURE_REASONS = {
   UPLOAD_EXPIRED: 'UPLOAD_EXPIRED',
 } as const;
 
+export type VideoFailureReason =
+  (typeof VIDEO_FAILURE_REASONS)[keyof typeof VIDEO_FAILURE_REASONS];
+
 // Layer 1 (pre-registration): declared MIME type → accepted file extension.
 export const VIDEO_ALLOWED_UPLOAD_FORMATS = {
   'video/mp4': '.mp4',

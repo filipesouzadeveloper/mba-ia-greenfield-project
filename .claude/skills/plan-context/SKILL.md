@@ -17,13 +17,13 @@ Detect mode from the argument format using the **unified slug lookup** defined i
 **Integer arg `NN`** → phase mode shortcut. Per `plan-pipeline/SKILL.md` → Slug discovery → Phase mode integer arg `NN`:
 
 - Resolve via atomic Grep set-arithmetic (`S_phase ∩ S_NN`) — see `plan-pipeline/SKILL.md` for the canonical primitive and PCRE pattern. No per-file frontmatter iteration.
-- Exactly 1 match → resolve to that slice's slug; target dir `docs/phases/phase-NN-{slug}/`.
+- Exactly 1 match → resolve to that slice's slug; target dir `docs/phases/phase-NN-{slug}/` (apply the prefixed-slug rule in `plan-pipeline/SKILL.md` → "Slug discovery → Phase scope name": a slug already starting with `phase-NN-` is not prefixed again).
 - 0 matches → abort with canonical message: `"Run /research phase NN first"`.
 - ≥2 matches → abort with canonical message: `"Phase NN has multiple slices: <list>. Pass an explicit slice slug."`
 
 **String arg `{slug}`** → unified slug lookup. Resolve via `docs/decisions/technical-decisions-{slug}.md`:
 
-- Exists with `scope_type: phase` → **phase mode (slice)**. Extract `NN` from `related_phases[0]`; target dir `docs/phases/phase-NN-{slug}/`. The slice's `covers_capabilities` and `depends_on_slices` frontmatter (per `plan-pipeline/SKILL.md` → Phase slicing) drive downstream behavior (Step 0, Step 0.5, Step 1, Step 6).
+- Exists with `scope_type: phase` → **phase mode (slice)**. Extract `NN` from `related_phases[0]`; target dir `docs/phases/phase-NN-{slug}/` (apply the prefixed-slug rule in `plan-pipeline/SKILL.md` → "Slug discovery → Phase scope name": a slug already starting with `phase-NN-` is not prefixed again). The slice's `covers_capabilities` and `depends_on_slices` frontmatter (per `plan-pipeline/SKILL.md` → Phase slicing) drive downstream behavior (Step 0, Step 0.5, Step 1, Step 6).
 - Exists with `scope_type: ad-hoc` → **task mode**. The companion `docs/tasks/task-{slug}/` directory may or may not exist yet; either way Step 1's directory bootstrap (`mkdir -p` per Phase mode item 2 / Task mode item 2 below) materializes it before any write. This explicitly covers the orphan ad-hoc case (`related_phases: []`): a decisions doc authored by `/research` with no companion task dir is accepted as a task-mode scope and the dir is auto-created, so the user can drive the doc through the pipeline (`/plan-context {slug} → /plan-validate {slug} → /plan-resolve {slug}`) without first hand-creating the task dir.
 - Doc does not exist → **task mode bootstrap**: if arg matches `^[a-z0-9-]+$` treat as slug; otherwise treat as prose, auto-derive slug via kebab-case. Apply slug-collision disambiguation (Decisão #22) via `AskUserQuestion` before creating `docs/tasks/task-{slug}/`.
 
@@ -47,7 +47,7 @@ Before any heavy work, in order:
 1. **Slug resolution** (per `plan-pipeline/SKILL.md` unified lookup):
    - **Integer arg `NN`:** resolve via atomic Grep set-arithmetic (`S_phase ∩ S_NN`) per `plan-pipeline/SKILL.md` → Slug discovery → Phase mode integer arg `NN`. No per-file frontmatter iteration. On 0 matches abort with `"Run /research phase NN first"`; on ≥2 matches abort with `"Phase NN has multiple slices: <list>. Pass an explicit slice slug."`; on 1 match record its slug.
    - **Slug arg:** read `docs/decisions/technical-decisions-{slug}.md` frontmatter; require `scope_type: phase`; extract `NN` from `related_phases[0]`.
-   - Record slug and target directory `docs/phases/phase-NN-{slug}/`.
+   - Record slug and target directory `docs/phases/phase-NN-{slug}/` (apply the prefixed-slug rule in `plan-pipeline/SKILL.md` → "Slug discovery → Phase scope name": a slug already starting with `phase-NN-` is not prefixed again).
 
 2. **Directory bootstrap**: ensure `docs/phases/phase-NN-{slug}/` exists (create it with `mkdir -p` if missing). Do not touch its contents yet.
 

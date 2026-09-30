@@ -13,6 +13,9 @@ docker compose ps   # all services must show status "running"
 Then verify each infrastructure service is actually ready to accept connections — not just running:
 
 - **PostgreSQL:** `docker compose exec db pg_isready -U streamtube` — expect `accepting connections`
+- **MinIO:** `docker compose exec minio mc ready local` — expect `The cluster 'local' is ready` (same probe as its healthcheck; `docker compose ps` shows `healthy`)
+- **Redis:** `docker compose exec redis redis-cli ping` — expect `PONG`
+- **video-worker:** it has no HTTP port. Its BullMQ worker registers a named Redis client (`<QUEUE_PREFIX>:<base64 queue name>`), so `docker compose exec redis redis-cli CLIENT LIST | grep -c "name=streamtube:"` — expect `1` or more (`0` means the worker is down or still compiling; check `docker compose logs video-worker` for `WorkerModule dependencies initialized`)
 
 Only start the NestJS dev server (`npm run start:dev`) when the user **explicitly** asks to run the application — never as part of "start the environment".
 
@@ -34,6 +37,10 @@ docker compose exec nestjs-api npm run start:dev
 Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `mailpit` — SMTP capture, SMTP port `1025`, web UI and API `http://localhost:8025`
+- `minio` — S3-compatible object storage (`pgsty/minio`), API port `9000`, console `http://localhost:9001`, user/password `streamtube` / `streamtube-secret`; stores the video originals and thumbnails
+- `redis` — Redis 8 (AOF on, `noeviction`), port `6379`; backs the BullMQ video-processing queue
+- `video-worker` — same image as `nestjs-api`, runs `npm run start:worker:dev` (Nest application context, no HTTP port); consumes the queue with FFmpeg. Its watcher does not detect edits on a Windows bind mount — run `docker compose restart video-worker` after changing worker code
 
 All verification and teardown commands run on the **host machine**:
 
@@ -44,9 +51,19 @@ curl http://localhost:3000
 # Verify PostgreSQL is ready (runs inside the db container)
 docker compose exec db pg_isready -U streamtube
 
+# Verify MinIO is ready (expect "The cluster 'local' is ready")
+docker compose exec minio mc ready local
+
+# Verify Redis is ready (expect PONG)
+docker compose exec redis redis-cli ping
+
+# Verify the video worker is connected to the queue (expect 1 or more)
+docker compose exec redis redis-cli CLIENT LIST | grep -c "name=streamtube:"
+
 # Check container logs
 docker compose logs nestjs-api
 docker compose logs db
+docker compose logs video-worker
 
 # Tear down the entire environment
 docker compose down
@@ -79,6 +96,8 @@ npm run format                           # Prettier formatting
 docker compose ps
 docker compose logs nestjs-api
 docker compose exec db pg_isready -U streamtube
+docker compose exec minio mc ready local
+docker compose exec redis redis-cli ping
 curl http://localhost:3000
 ```
 
@@ -119,7 +138,7 @@ Conventions for **how to write** each kind of test (mocking patterns, AAA struct
 
 These settings are required in `package.json` (jest config) and `test/jest-e2e.json` for the project's tests to work correctly:
 
-- `setupFiles: ["dotenv/config"]` — without this, `.env` is not loaded inside the Jest process. `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS.
+- `setupFiles: ["dotenv/config", ".../src/test/test-env.ts"]` — `dotenv/config` loads `.env` inside the Jest process; without it `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS. `src/test/test-env.ts` runs next and sets `QUEUE_PREFIX=streamtube-test` (test jobs never reach the dev `video-worker`) and `S3_PUBLIC_ENDPOINT=$S3_ENDPOINT` (presigned URLs must use a host the container can reach). The path is `<rootDir>/test/test-env.ts` in `package.json` (rootDir `src`) and `<rootDir>/../src/test/test-env.ts` in `test/jest-e2e.json` (rootDir `test`).
 - `testRegex: '.*\\.(spec|integration-spec)\\.ts$'` — covers both unit (`*.spec.ts`) and integration (`*.integration-spec.ts`) suffixes.
 
 Do not add new test-file suffixes; if a new test type is needed, update the regex deliberately.
@@ -148,6 +167,44 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
+
+## Videos (Phase 03)
+
+Upload, processing and delivery of videos. Decisions in `docs/decisions/technical-decisions-phase-03-videos.md`; plan and contracts in `docs/phases/phase-03-videos/`.
+
+### Modules
+
+| Path | Owns |
+|------|------|
+| `src/videos/` | `Video` entity (`channel_id` FK → `channels`, `ON DELETE CASCADE`), `VideosController`, `VideosService`, slug, format allowlist, `Range` parsing, `VideoProcessingQueue` (publisher), `VideoUploadCleanupService` |
+| `src/storage/` | `StorageService` — the only code that talks to S3/MinIO (multipart, presigned URLs, object streams). Creates `S3_BUCKET` on boot |
+| `src/queue/` | BullMQ connection (`QUEUE_PREFIX`), queue `video-processing`, job names `process-video` and `cleanup-stale-uploads` |
+| `src/worker/` + `src/worker.ts` | `WorkerModule` (Nest application context, no HTTP), `VideoProcessor`, `FfmpegService`, `VideoJobsScheduler` — runs only in the `video-worker` service (`npm run start:worker:dev`), never inside the API |
+
+### Upload and processing flow
+
+1. `POST /videos` — validates the format (layer 1: MIME + extension, MP4/WebM) and size (≤ 10 GiB), inserts a `draft`, starts a multipart upload and returns presigned `UploadPart` URLs (64 MiB parts, 1h expiry) signed with `S3_PUBLIC_ENDPOINT`. **The video bytes never go through the API.**
+2. `GET /videos/{id}/upload` — resume: lists stored parts and re-signs only the missing ones.
+3. `POST /videos/{id}/upload/complete` — completes the multipart with the parts listed from storage, checks the object size, moves `draft → processing` with a conditional `UPDATE ... WHERE status = 'draft'` and enqueues `process-video` with `jobId = video.id` (3 attempts, exponential backoff).
+4. `VideoProcessor` (worker) — skips the job unless the video is `processing`; runs `ffprobe` on a presigned internal URL, validates codecs (layer 2), extracts metadata, writes `videos/{id}/thumbnail.jpg` from the frame at 10% of the duration, and sets `ready`.
+5. `cleanup-stale-uploads` — job scheduler (every hour) that aborts multiparts of drafts older than 24h and marks them `failed`.
+
+### Status cycle
+
+`draft → processing → ready | failed`, single `status` column (enum `video_status`) plus `failure_reason`: `NOT_A_VIDEO`, `UNSUPPORTED_FORMAT` (permanent — no retry), `PROCESSING_ERROR` (transient error after the last attempt), `FILE_TOO_LARGE` (on complete), `UPLOAD_EXPIRED` (cleanup job). Every transition is a conditional update on the expected current status — never read-then-write.
+
+### Rules
+
+- **Owner routes use the `id` (uuid, `ParseUUIDPipe`); public routes use the `slug`.** A missing video and another channel's video both return `404 VIDEO_NOT_FOUND`.
+- Public routes (`/videos/{slug}/stream`, `/download`, `/thumbnail`) are `@Public()` and serve only `ready` videos. The bucket is private: bytes are piped from `StorageService.getObjectStream` without buffering, with `Range` → `206` and invalid ranges → `416` + `Content-Range: bytes */{size}`.
+- Slug: 11 base64url characters from `crypto.randomBytes`, retried on the `UQ_videos_slug` violation.
+- Constants (sizes, part size, expiry, allowlist, failure reasons) live in `src/videos/videos.constants.ts`; worker-only constants in `src/worker/worker.constants.ts`. API code does not use worker providers; the only link is `src/videos/video-format.ts` importing the `ffprobe` output **types** (`import type`) from `src/worker/ffmpeg.service.ts`.
+- Adding an enum-typed column in a migration: also add the type to `MANAGED_ENUM_TYPES` in `src/database/migrations.integration-spec.ts`.
+
+### Testing videos
+
+- Storage, queue and FFmpeg are real in integration/E2E tests — see `.claude/skills/testing-guide-nestjs-project/references/external-systems.md`. Test jobs use the `streamtube-test` prefix (set by `src/test/test-env.ts`), so the dev `video-worker` never consumes them.
+- Video fixtures are generated at test time by `src/test/video-fixtures.ts`; binary responses are read with `src/test/binary-parser.ts`.
 
 ## Code Conventions
 

@@ -30,7 +30,7 @@ Every stage skill detects the mode from the argument format. Phase slicing means
 
 - **Integer arg `NN`** → **phase mode shortcut** — see "Slug discovery → Phase mode integer arg" below for the resolution algorithm.
 - **String arg `{slug}`** → **unified slug lookup**. Resolve via `docs/decisions/technical-decisions-{slug}.md`:
-  - Exists with `scope_type: phase` → **phase mode** (slice). Extract `NN` from `related_phases[0]`; target dir is `docs/phases/phase-NN-{slug}/`.
+  - Exists with `scope_type: phase` → **phase mode** (slice). Extract `NN` from `related_phases[0]`; target dir is `docs/phases/phase-NN-{slug}/` (apply the prefixed-slug rule in "Slug discovery → Phase scope name").
   - Exists with `scope_type: ad-hoc` AND `docs/tasks/task-{slug}/` exists → **task mode**.
   - Doc does not exist → **task mode bootstrap** (treat arg as slug if it matches `^[a-z0-9-]+$`; otherwise treat as prose and auto-derive a slug, kebab-case, max 40 chars, confirming with the user before creating `docs/tasks/task-{slug}/`).
 
@@ -95,6 +95,15 @@ Every artifact is **owned by exactly one stage**. Other stages may read or patch
 ## Shared convention — Slug discovery
 
 Every stage skill needs the slug for its artifacts. Under the slicing model, **≥1 `scope_type: phase` docs may exist per `NN`** (one per slice). Discovery is **automatic** and mode-dependent:
+
+### Phase scope name — prefixed-slug rule
+
+In phase mode the **scope name** is `phase-NN-{slug}` — **except** when `{slug}` already starts with `phase-NN-` (same zero-padded `NN`), in which case the scope name is `{slug}` itself (the prefix is never duplicated). Every occurrence of `phase-NN-{slug}` across the pipeline skills and agents — scope directory `docs/phases/phase-NN-{slug}/`, plan artifact `phase-NN-{slug}.md`, frontmatter `name: phase-NN-{slug}`, inventory path `screen-inventory-phase-NN-{slug}.md` — denotes this scope name.
+
+- `technical-decisions-auth.md` + `related_phases: [2]` → `docs/phases/phase-02-auth/phase-02-auth.md`
+- `technical-decisions-phase-03-videos.md` + `related_phases: [3]` → `docs/phases/phase-03-videos/phase-03-videos.md` (**not** `phase-03-phase-03-videos`)
+
+The slug itself is unchanged: `technical-decisions-{slug}.md` lookups and `{slug}/TD-NN` references keep the full slug (e.g. `phase-03-videos/TD-01`). Rationale: phase decisions docs named after their phase folder (the repository's `phase-01-configuracao-base`, `phase-02-auth` and `phase-02-auth-frontend` artifacts follow this convention) must map to that same folder.
 
 ### Phase mode integer arg `NN`
 

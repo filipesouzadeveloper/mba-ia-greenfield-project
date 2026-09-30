@@ -48,3 +48,55 @@ export class TokenReuseDetectedException extends DomainException {
     );
   }
 }
+
+export class UnsupportedVideoFormatException extends DomainException {
+  constructor() {
+    super(
+      'UNSUPPORTED_VIDEO_FORMAT',
+      422,
+      'Video format is not supported; use MP4 (video/mp4) or WebM (video/webm)',
+    );
+  }
+}
+
+export class VideoTooLargeException extends DomainException {
+  constructor() {
+    super('VIDEO_TOO_LARGE', 413, 'Video exceeds the maximum size of 10 GiB');
+  }
+}
+
+export class VideoNotFoundException extends DomainException {
+  constructor() {
+    super('VIDEO_NOT_FOUND', 404, 'Video not found');
+  }
+}
+
+export class InvalidVideoStatusException extends DomainException {
+  constructor() {
+    super(
+      'INVALID_VIDEO_STATUS',
+      409,
+      'Video status does not allow this operation',
+    );
+  }
+}
+
+export class RangeNotSatisfiableException extends DomainException {
+  constructor() {
+    super(
+      'RANGE_NOT_SATISFIABLE',
+      416,
+      'Requested range is outside the video or malformed',
+    );
+  }
+}
+
+export class UploadIncompleteException extends DomainException {
+  constructor() {
+    super(
+      'UPLOAD_INCOMPLETE',
+      409,
+      'Not every part of the video has been uploaded',
+    );
+  }
+}

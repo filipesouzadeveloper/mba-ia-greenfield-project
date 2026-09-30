@@ -12,18 +12,18 @@ This is a monorepo with two main areas:
 
 - `nestjs-project/` — Backend API (NestJS 11, TypeScript, Express). Contains modules for users, channels, videos, comments, etc.
 - `docs/` — Project documentation, architecture diagrams, and planning.
-- `next-frontend/` (Next.js) — not yet initialized
+- `next-frontend/` — Frontend (Next.js 16, App Router, BFF via Route Handlers). Has its own `CLAUDE.md` and Docker stack.
 
 ## Architecture (C4 Container Diagram)
 
 See `docs/diagrams/software-arch.mermaid` for the full diagram. Key containers:
 
-- **Frontend** (Next.js) → calls API via REST, streams from Object Storage
-- **API** (Nest.js) → business rules, auth, reads/writes DB, uploads to storage, publishes jobs to queue, sends emails
+- **Frontend** (Next.js) → calls API via REST, uploads video parts straight to Object Storage through presigned URLs
+- **API** (Nest.js) → business rules, auth, reads/writes DB, presigns uploads, streams videos and thumbnails from the private bucket, publishes jobs to queue, sends emails
 - **Video Worker** (FFmpeg) → consumes jobs from queue, processes videos, updates DB and storage
 - **Database** (PostgreSQL) → users, channels, videos, comments, likes
-- **Object Storage** (S3/MinIO) → video files and thumbnails
-- **Message Queue** (TBD) → video processing job queue
+- **Object Storage** (MinIO, S3 API) → private bucket with video files and thumbnails
+- **Message Queue** (Redis + BullMQ) → video processing job queue and scheduled cleanup of abandoned uploads
 - **Email Service** (SMTP) → account confirmation and password recovery
 
 ## Docker Networking

@@ -37,6 +37,7 @@ docker compose exec nestjs-api npm run start:dev
 Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `mailpit` — SMTP capture, SMTP port `1025`, web UI and API `http://localhost:8025`
 - `minio` — S3-compatible object storage (`pgsty/minio`), API port `9000`, console `http://localhost:9001`, user/password `streamtube` / `streamtube-secret`; stores the video originals and thumbnails
 - `redis` — Redis 8 (AOF on, `noeviction`), port `6379`; backs the BullMQ video-processing queue
 - `video-worker` — same image as `nestjs-api`, runs `npm run start:worker:dev` (Nest application context, no HTTP port); consumes the queue with FFmpeg. Its watcher does not detect edits on a Windows bind mount — run `docker compose restart video-worker` after changing worker code
@@ -137,7 +138,7 @@ Conventions for **how to write** each kind of test (mocking patterns, AAA struct
 
 These settings are required in `package.json` (jest config) and `test/jest-e2e.json` for the project's tests to work correctly:
 
-- `setupFiles: ["dotenv/config"]` — without this, `.env` is not loaded inside the Jest process. `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS.
+- `setupFiles: ["dotenv/config", ".../src/test/test-env.ts"]` — `dotenv/config` loads `.env` inside the Jest process; without it `DB_HOST`, `JWT_SECRET`, etc. fall back to undefined or to the host's `localhost`, breaking container-to-container DNS. `src/test/test-env.ts` runs next and sets `QUEUE_PREFIX=streamtube-test` (test jobs never reach the dev `video-worker`) and `S3_PUBLIC_ENDPOINT=$S3_ENDPOINT` (presigned URLs must use a host the container can reach). The path is `<rootDir>/test/test-env.ts` in `package.json` (rootDir `src`) and `<rootDir>/../src/test/test-env.ts` in `test/jest-e2e.json` (rootDir `test`).
 - `testRegex: '.*\\.(spec|integration-spec)\\.ts$'` — covers both unit (`*.spec.ts`) and integration (`*.integration-spec.ts`) suffixes.
 
 Do not add new test-file suffixes; if a new test type is needed, update the regex deliberately.

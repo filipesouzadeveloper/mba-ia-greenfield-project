@@ -37,89 +37,65 @@ How each external system is handled in tests. These strategies were confirmed wi
 
 ---
 
-## Object Storage — Local Filesystem
+## Object Storage — Real MinIO (Docker)
 
-**Strategy:** Local filesystem storage in development and tests. S3 in production.
+**Strategy:** Real MinIO via the Docker `minio` service (S3 API), reached through `StorageService` (`src/storage/`). No local-filesystem adapter and no S3 mock: multipart upload, presigned URLs and `Range` reads are exactly what must be proven.
 
 **Approach:**
-- The storage layer should use an abstraction (e.g., `StorageService` interface) that allows switching between local filesystem and S3
-- In tests, use the local filesystem adapter — no mocking needed
-- Use a temporary directory for test uploads: `os.tmpdir()` or a dedicated `test-uploads/` directory
-- Clean up test files in `afterAll`
+- Tests use the same `S3_*` variables as dev. `src/test/test-env.ts` (in Jest `setupFiles`) sets `S3_PUBLIC_ENDPOINT = S3_ENDPOINT`, because inside the container `localhost:9000` does not reach MinIO and the host is part of the SigV4 signature.
+- Use random object keys (`storage.originalKey(randomUUID())`) so suites never collide, and delete the objects you create in `afterAll` (E2E suites also remove `videos/{id}/original`).
+- When the test must prove bucket creation, use a throwaway bucket (`streamtube-test-<uuid>`), point `S3_BUCKET` to it before compiling the module and delete it in `afterAll`.
+- Upload parts with a plain `fetch(url, { method: 'PUT', body })` on the presigned URL — the same call the browser makes.
 
-**Setup pattern:**
+**Integration test (shape of `src/storage/storage.service.integration-spec.ts`):**
 ```typescript
-// In test module setup
-{
-  provide: 'STORAGE_CONFIG',
-  useValue: {
-    driver: 'local',
-    basePath: path.join(os.tmpdir(), 'streamtube-test-uploads'),
-  },
-}
-```
+it('lists a part uploaded through a presigned URL', async () => {
+  const key = storage.originalKey(randomUUID());
+  const uploadId = await storage.createMultipartUpload(key, 'video/mp4');
+  const url = await storage.presignUploadPart(key, uploadId, 1);
 
-**Integration test:**
-```typescript
-import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
+  const response = await fetch(url, { method: 'PUT', body: content });
+  expect(response.status).toBe(200);
 
-describe('StorageService (integration)', () => {
-  const testDir = path.join(os.tmpdir(), 'streamtube-test-uploads');
-
-  afterAll(() => {
-    fs.rmSync(testDir, { recursive: true, force: true });
-  });
-
-  it('should upload and retrieve a file', async () => {
-    const buffer = Buffer.from('test content');
-    const key = await storageService.upload(buffer, 'test.txt');
-
-    const retrieved = await storageService.get(key);
-    expect(retrieved.toString()).toBe('test content');
-  });
+  const parts = await storage.listParts(key, uploadId);
+  expect(parts.map((part) => part.partNumber)).toEqual([1]);
 });
 ```
 
 ---
 
-## Message Queue — Real (Docker)
+## Message Queue — Real Redis + BullMQ (Docker)
 
-**Strategy:** Real message broker in Docker. The specific technology is TBD per the architecture diagram (likely BullMQ with Redis or RabbitMQ).
+**Strategy:** Real Redis via the Docker `redis` service, BullMQ through `@nestjs/bullmq` (`src/queue/`). Queue `video-processing`, jobs `process-video` and `cleanup-stale-uploads`.
 
-**When the queue technology is chosen, configure:**
-- A queue broker service in `compose.yaml` (e.g., Redis for BullMQ, RabbitMQ for AMQP)
-- Test isolation: use dedicated test queues or clean queues between tests
-- For publisher tests: assert the job is enqueued with correct data
-- For consumer tests: submit a job and assert the processing outcome
-
-**Setup pattern (BullMQ example):**
-```typescript
-// In test module
-BullModule.forRoot({
-  connection: {
-    host: process.env.REDIS_HOST ?? 'localhost',
-    port: Number(process.env.REDIS_PORT ?? 6379),
-  },
-}),
-BullModule.registerQueue({ name: 'video-processing' }),
-```
+**Test isolation:**
+- `src/test/test-env.ts` sets `QUEUE_PREFIX=streamtube-test`, so test jobs never reach the dev `video-worker` (prefix `streamtube`). Do not override it in a test.
+- Use random job ids (`test-${randomUUID()}`) or the video id as `jobId`, and call `queue.obliterate({ force: true })` in `beforeEach`/`afterAll` when the suite asserts queue state.
+- Publisher tests assert the job (`queue.getJob(videoId)`) and its data; consumer tests enqueue through the real `VideoProcessingQueue` and wait for the outcome in the database, with the real `VideoProcessor` running in the test module.
+- A test that must not have the job consumed (e.g. the scheduler test) compiles a module with the queue only, without the processor.
+- Close the module in `afterAll` — open Redis connections keep Jest alive.
 
 ```typescript
-describe('VideoService (integration - queue)', () => {
-  it('should enqueue a processing job on upload', async () => {
-    await videoService.upload(videoData);
+it('stores job keys under the streamtube-test prefix', async () => {
+  const jobId = `test-${randomUUID()}`;
+  await queue.add(PROCESS_VIDEO_JOB, { videoId: randomUUID() }, { jobId });
 
-    const queue = module.get<Queue>(getQueueToken('video-processing'));
-    const jobs = await queue.getJobs(['waiting']);
-    expect(jobs).toHaveLength(1);
-    expect(jobs[0].data).toEqual(
-      expect.objectContaining({ videoId: expect.any(String) }),
-    );
-  });
+  const redis = await queue.getBackend().client; // bullmq v6: no queue.client
+  const testJobHash = await redis.hgetall(
+    `streamtube-test:${VIDEO_PROCESSING_QUEUE}:${jobId}`,
+  );
+  expect(testJobHash.name).toBe(PROCESS_VIDEO_JOB);
 });
 ```
+
+---
+
+## FFmpeg / ffprobe — Real binary (Docker image)
+
+**Strategy:** The real `ffmpeg`/`ffprobe` installed in `Dockerfile.dev`. No committed media fixtures and no mocked probe output in integration tests.
+
+- Generate fixtures at test time with `src/test/video-fixtures.ts` (`generateVideoFixture(...)`, `generateThumbnailFixture()`), which encode short `testsrc` clips with the requested codecs.
+- Pure classification rules (allowlist, container/codec mapping) stay in unit tests over plain `ffprobe`-shaped objects (`src/videos/video-format.spec.ts`).
 
 ---
 

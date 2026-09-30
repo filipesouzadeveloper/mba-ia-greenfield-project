@@ -13,6 +13,9 @@ docker compose ps   # all services must show status "running"
 Then verify each infrastructure service is actually ready to accept connections — not just running:
 
 - **PostgreSQL:** `docker compose exec db pg_isready -U streamtube` — expect `accepting connections`
+- **MinIO:** `docker compose exec minio mc ready local` — expect `The cluster 'local' is ready` (same probe as its healthcheck; `docker compose ps` shows `healthy`)
+- **Redis:** `docker compose exec redis redis-cli ping` — expect `PONG`
+- **video-worker:** it has no HTTP port. Its BullMQ worker registers a named Redis client (`<QUEUE_PREFIX>:<base64 queue name>`), so `docker compose exec redis redis-cli CLIENT LIST | grep -c "name=streamtube:"` — expect `1` or more (`0` means the worker is down or still compiling; check `docker compose logs video-worker` for `WorkerModule dependencies initialized`)
 
 Only start the NestJS dev server (`npm run start:dev`) when the user **explicitly** asks to run the application — never as part of "start the environment".
 
@@ -34,6 +37,9 @@ docker compose exec nestjs-api npm run start:dev
 Services:
 - `nestjs-api` — NestJS API, port `3000`
 - `db` — PostgreSQL 17, port `5432`, database `streamtube`, user/password `streamtube`
+- `minio` — S3-compatible object storage (`pgsty/minio`), API port `9000`, console `http://localhost:9001`, user/password `streamtube` / `streamtube-secret`; stores the video originals and thumbnails
+- `redis` — Redis 8 (AOF on, `noeviction`), port `6379`; backs the BullMQ video-processing queue
+- `video-worker` — same image as `nestjs-api`, runs `npm run start:worker:dev` (Nest application context, no HTTP port); consumes the queue with FFmpeg. Its watcher does not detect edits on a Windows bind mount — run `docker compose restart video-worker` after changing worker code
 
 All verification and teardown commands run on the **host machine**:
 
@@ -44,9 +50,19 @@ curl http://localhost:3000
 # Verify PostgreSQL is ready (runs inside the db container)
 docker compose exec db pg_isready -U streamtube
 
+# Verify MinIO is ready (expect "The cluster 'local' is ready")
+docker compose exec minio mc ready local
+
+# Verify Redis is ready (expect PONG)
+docker compose exec redis redis-cli ping
+
+# Verify the video worker is connected to the queue (expect 1 or more)
+docker compose exec redis redis-cli CLIENT LIST | grep -c "name=streamtube:"
+
 # Check container logs
 docker compose logs nestjs-api
 docker compose logs db
+docker compose logs video-worker
 
 # Tear down the entire environment
 docker compose down
@@ -79,6 +95,8 @@ npm run format                           # Prettier formatting
 docker compose ps
 docker compose logs nestjs-api
 docker compose exec db pg_isready -U streamtube
+docker compose exec minio mc ready local
+docker compose exec redis redis-cli ping
 curl http://localhost:3000
 ```
 

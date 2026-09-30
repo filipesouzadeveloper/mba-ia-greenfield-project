@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
-**Status:** in_progress
-**SIs:** 13/14 completed
+**Status:** completed
+**SIs:** 14/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -138,6 +138,10 @@
   - Fora do escopo: `VideoProcessor.process` segue tipado como `Job<ProcessVideoJobData>`, embora o job de limpeza chegue sem `videoId` (o ramo não lê `data`).
 
 ### SI-03.13 — Atualizar openapi.json e documentação do ambiente
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** sem testes novos (documentação e artefato gerado); `tsc --noEmit` e lint limpos
+- **Observations:**
+  - `openapi.json` regenerado com `npm run openapi:export` no container: o diff só acrescenta (841 linhas, nenhuma remoção). As 7 operações de § API Contracts estão lá, com cada status documentado e os erros apontando para `ApiErrorEnvelope`.
+  - Prontidão do `video-worker`: ele não tem porta HTTP, então a verificação conta os clientes Redis com nome `streamtube:<fila em base64>`, que o worker do BullMQ registra. Conferido à mão: `0` com o container parado e `1` depois do boot (~1 min no volume do Windows).
+  - Os comandos de prontidão de MinIO (`mc ready local`) e Redis (`redis-cli ping`) foram rodados antes de irem para o `CLAUDE.md`.
+  - Fora do escopo: o `mailpit` também não aparece na lista de serviços do `nestjs-project/CLAUDE.md` (lacuna da fase anterior).

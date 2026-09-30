@@ -168,6 +168,44 @@ NestJS with standard module structure. Source lives in `src/`, compiled output i
 - Each domain feature gets its own module (e.g., `UsersModule`, `VideosModule`) registered in `AppModule`
 - Controllers handle HTTP routing; Services hold business logic; both are scoped to their module
 
+## Videos (Phase 03)
+
+Upload, processing and delivery of videos. Decisions in `docs/decisions/technical-decisions-phase-03-videos.md`; plan and contracts in `docs/phases/phase-03-videos/`.
+
+### Modules
+
+| Path | Owns |
+|------|------|
+| `src/videos/` | `Video` entity (`channel_id` FK → `channels`, `ON DELETE CASCADE`), `VideosController`, `VideosService`, slug, format allowlist, `Range` parsing, `VideoProcessingQueue` (publisher), `VideoUploadCleanupService` |
+| `src/storage/` | `StorageService` — the only code that talks to S3/MinIO (multipart, presigned URLs, object streams). Creates `S3_BUCKET` on boot |
+| `src/queue/` | BullMQ connection (`QUEUE_PREFIX`), queue `video-processing`, job names `process-video` and `cleanup-stale-uploads` |
+| `src/worker/` + `src/worker.ts` | `WorkerModule` (Nest application context, no HTTP), `VideoProcessor`, `FfmpegService`, `VideoJobsScheduler` — runs only in the `video-worker` service (`npm run start:worker:dev`), never inside the API |
+
+### Upload and processing flow
+
+1. `POST /videos` — validates the format (layer 1: MIME + extension, MP4/WebM) and size (≤ 10 GiB), inserts a `draft`, starts a multipart upload and returns presigned `UploadPart` URLs (64 MiB parts, 1h expiry) signed with `S3_PUBLIC_ENDPOINT`. **The video bytes never go through the API.**
+2. `GET /videos/{id}/upload` — resume: lists stored parts and re-signs only the missing ones.
+3. `POST /videos/{id}/upload/complete` — completes the multipart with the parts listed from storage, checks the object size, moves `draft → processing` with a conditional `UPDATE ... WHERE status = 'draft'` and enqueues `process-video` with `jobId = video.id` (3 attempts, exponential backoff).
+4. `VideoProcessor` (worker) — skips the job unless the video is `processing`; runs `ffprobe` on a presigned internal URL, validates codecs (layer 2), extracts metadata, writes `videos/{id}/thumbnail.jpg` from the frame at 10% of the duration, and sets `ready`.
+5. `cleanup-stale-uploads` — job scheduler (every hour) that aborts multiparts of drafts older than 24h and marks them `failed`.
+
+### Status cycle
+
+`draft → processing → ready | failed`, single `status` column (enum `video_status`) plus `failure_reason`: `NOT_A_VIDEO`, `UNSUPPORTED_FORMAT` (permanent — no retry), `PROCESSING_ERROR` (transient error after the last attempt), `FILE_TOO_LARGE` (on complete), `UPLOAD_EXPIRED` (cleanup job). Every transition is a conditional update on the expected current status — never read-then-write.
+
+### Rules
+
+- **Owner routes use the `id` (uuid, `ParseUUIDPipe`); public routes use the `slug`.** A missing video and another channel's video both return `404 VIDEO_NOT_FOUND`.
+- Public routes (`/videos/{slug}/stream`, `/download`, `/thumbnail`) are `@Public()` and serve only `ready` videos. The bucket is private: bytes are piped from `StorageService.getObjectStream` without buffering, with `Range` → `206` and invalid ranges → `416` + `Content-Range: bytes */{size}`.
+- Slug: 11 base64url characters from `crypto.randomBytes`, retried on the `UQ_videos_slug` violation.
+- Constants (sizes, part size, expiry, allowlist, failure reasons) live in `src/videos/videos.constants.ts`; worker-only constants in `src/worker/worker.constants.ts`. API code does not use worker providers; the only link is `src/videos/video-format.ts` importing the `ffprobe` output **types** (`import type`) from `src/worker/ffmpeg.service.ts`.
+- Adding an enum-typed column in a migration: also add the type to `MANAGED_ENUM_TYPES` in `src/database/migrations.integration-spec.ts`.
+
+### Testing videos
+
+- Storage, queue and FFmpeg are real in integration/E2E tests — see `.claude/skills/testing-guide-nestjs-project/references/external-systems.md`. Test jobs use the `streamtube-test` prefix (set by `src/test/test-env.ts`), so the dev `video-worker` never consumes them.
+- Video fixtures are generated at test time by `src/test/video-fixtures.ts`; binary responses are read with `src/test/binary-parser.ts`.
+
 ## Code Conventions
 
 - **TypeScript:** `nodenext` module resolution, `ES2023` target, `strictNullChecks` on, `noImplicitAny` off

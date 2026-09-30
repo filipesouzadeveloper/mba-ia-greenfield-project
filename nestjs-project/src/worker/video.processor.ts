@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { UnrecoverableError, type Job } from 'bullmq';
 import type { Repository } from 'typeorm';
 import {
+  CLEANUP_STALE_UPLOADS_JOB,
   PROCESS_VIDEO_JOB,
   VIDEO_PROCESSING_QUEUE,
 } from '../queue/queue.constants';
@@ -12,6 +13,7 @@ import { Video, VideoStatus } from '../videos/entities/video.entity';
 import { classifyProbe, findVideoStream } from '../videos/video-format';
 import { VideoProcessingFailure } from '../videos/video-processing-failure';
 import type { ProcessVideoJobData } from '../videos/video-processing.queue';
+import { VideoUploadCleanupService } from '../videos/video-upload-cleanup.service';
 import { VIDEO_FAILURE_REASONS } from '../videos/videos.constants';
 import {
   FfmpegService,
@@ -29,6 +31,7 @@ export class VideoProcessor extends WorkerHost {
     private readonly videoRepository: Repository<Video>,
     private readonly storageService: StorageService,
     private readonly ffmpegService: FfmpegService,
+    private readonly videoUploadCleanupService: VideoUploadCleanupService,
   ) {
     super();
   }
@@ -37,6 +40,8 @@ export class VideoProcessor extends WorkerHost {
     switch (job.name) {
       case PROCESS_VIDEO_JOB:
         return this.processVideo(job.data.videoId);
+      case CLEANUP_STALE_UPLOADS_JOB:
+        return this.cleanupStaleUploads();
       default:
         throw new UnrecoverableError(`Unknown job name: ${job.name}`);
     }
@@ -71,6 +76,11 @@ export class VideoProcessor extends WorkerHost {
         updateError instanceof Error ? updateError.stack : updateError,
       );
     }
+  }
+
+  private async cleanupStaleUploads(): Promise<void> {
+    const expired = await this.videoUploadCleanupService.cleanupStaleUploads();
+    if (expired > 0) this.logger.log(`Expired ${expired} stale upload(s)`);
   }
 
   // At-least-once delivery: a video that already left `processing` is skipped.

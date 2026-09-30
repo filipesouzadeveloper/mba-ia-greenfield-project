@@ -1,7 +1,7 @@
 # phase-03-videos — Progress
 
 **Status:** in_progress
-**SIs:** 12/14 completed
+**SIs:** 13/14 completed
 
 ### SI-03.1 — Infra: MinIO, Redis, FFmpeg e variáveis de ambiente
 - **Status:** completed
@@ -127,9 +127,15 @@
   - O `binaryParser` compartilhado (`src/test/binary-parser.ts`) veio da correção do SI-03.10.
 
 ### SI-03.12 — Limpar uploads multipart abandonados (job agendado)
-- **Status:** pending
-- **Tests:** —
-- **Observations:** none
+- **Status:** completed
+- **Tests:** 7 novos passing (5 em `video-upload-cleanup.service.integration-spec.ts`, 2 em `video-jobs.scheduler.integration-spec.ts`), todos na 1ª rodada; `worker.module` (4) e `video.processor` (6) seguem verdes com o scheduler no `WorkerModule`; `tsc --noEmit` e lint limpos
+- **Observations:**
+  - Assinatura de `upsertJobScheduler(id, repeatOpts, template)` conferida no context7 (`/taskforcesh/bullmq`, guia de Job Schedulers e migração v5→v6) e nos typings do `bullmq@6.3.9` instalado. O template define `name: CLEANUP_STALE_UPLOADS_JOB`, `removeOnComplete: true` e `removeOnFail: 100`, para os jobs de hora em hora não se acumularem no Redis.
+  - Id, intervalo e retenção do agendamento em `CLEANUP_STALE_UPLOADS_SCHEDULE` (`worker.constants.ts`); o id coincide com o nome do job, mas são constantes distintas (uma identifica o agendamento, a outra o despacho no processor).
+  - `abortMultipartUpload` do `StorageService` já ignorava `NoSuchUpload` (SI-03.2); o serviço só o chama. A busca vem ordenada por `created_at` (mais antigo primeiro).
+  - Erro ao expirar um rascunho é registrado no log e não interrompe os demais (job agendado — exceção prevista em `nestjs-services.md`); o rascunho com erro continua `draft` e é tentado de novo na próxima hora. Coberto por teste.
+  - Teste do scheduler usa um módulo só com fila (sem `VideoProcessor`), para nenhum worker consumir o job durante a verificação.
+  - Fora do escopo: `VideoProcessor.process` segue tipado como `Job<ProcessVideoJobData>`, embora o job de limpeza chegue sem `videoId` (o ramo não lê `data`).
 
 ### SI-03.13 — Atualizar openapi.json e documentação do ambiente
 - **Status:** pending

@@ -9,7 +9,9 @@ import { QueueModule } from '../queue/queue.module';
 import { StorageModule } from '../storage/storage.module';
 import { UsersModule } from '../users/users.module';
 import { Video } from '../videos/entities/video.entity';
+import { VideoUploadCleanupService } from '../videos/video-upload-cleanup.service';
 import { FfmpegService } from './ffmpeg.service';
+import { VideoJobsScheduler } from './video-jobs.scheduler';
 import { VideoProcessor } from './video.processor';
 
 @Module({
@@ -23,6 +25,11 @@ import { VideoProcessor } from './video.processor';
     TypeOrmModule.forFeature([Video]),
     BullModule.registerQueue({ name: VIDEO_PROCESSING_QUEUE }),
   ],
-  providers: [FfmpegService, VideoProcessor],
+  providers: [
+    FfmpegService,
+    VideoUploadCleanupService,
+    VideoProcessor,
+    VideoJobsScheduler,
+  ],
 })
 export class WorkerModule {}
